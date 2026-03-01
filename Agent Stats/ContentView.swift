@@ -17,6 +17,45 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
+enum SessionHistoryRange: String, CaseIterable, Identifiable {
+    case last24Hours = "24h"
+    case last7Days = "7d"
+    case last30Days = "30d"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .last24Hours:
+            return "Last 24 Hours"
+        case .last7Days:
+            return "Last 7 Days"
+        case .last30Days:
+            return "Last 30 Days"
+        }
+    }
+
+    func cutoff(from now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        switch self {
+        case .last24Hours:
+            return calendar.date(byAdding: .hour, value: -24, to: now) ?? .distantPast
+        case .last7Days:
+            return calendar.date(byAdding: .day, value: -7, to: now) ?? .distantPast
+        case .last30Days:
+            return calendar.date(byAdding: .day, value: -30, to: now) ?? .distantPast
+        }
+    }
+}
+
+private struct DetailWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 enum UITheme {
     static let page = Color(red: 0.02, green: 0.03, blue: 0.06)
     static let pageAlt = Color(red: 0.05, green: 0.08, blue: 0.14)
@@ -37,6 +76,8 @@ struct ContentView: View {
     @Bindable var model: AppModel
 
     @State private var selection: SidebarItem? = .dashboard
+    @State var sessionHistoryRange: SessionHistoryRange = .last24Hours
+    @State var detailAvailableWidth: CGFloat = 0
 
     var body: some View {
         NavigationSplitView {
@@ -84,8 +125,8 @@ struct ContentView: View {
                 detailBody
             }
         }
-        .transaction { transaction in
-            transaction.animation = nil
+        .onPreferenceChange(DetailWidthPreferenceKey.self) { newWidth in
+            detailAvailableWidth = newWidth
         }
         .background(Color.clear)
     }
@@ -112,6 +153,11 @@ struct ContentView: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(8)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: DetailWidthPreferenceKey.self, value: proxy.size.width)
+            }
+        )
     }
 
     private var usesPageScroll: Bool {
@@ -177,7 +223,7 @@ struct ContentView: View {
     private var headerTitle: String {
         switch selection ?? .dashboard {
         case .dashboard:
-            return "Night shift, \(firstName)"
+            return "\(timeOfDayGreeting), \(firstName)"
         default:
             return (selection ?? .dashboard).rawValue
         }
@@ -193,9 +239,9 @@ struct ContentView: View {
             let cost = (model.costSummary?.allTime ?? 0).currency
             return "\(sessions) sessions analyzed. Estimated spend: \(cost)."
         case .pricing:
-            let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? .distantPast
+            let cutoff = sessionHistoryRange.cutoff()
             let count = number(model.liveSessions.filter { $0.lastUpdated >= cutoff }.count)
-            return "Detailed model-level costs and \(count) session history rows."
+            return "Detailed model-level costs and \(count) session rows in \(sessionHistoryRange.rawValue)."
         case .threads:
             let count = number(model.snapshot?.threads.count ?? 0)
             return "\(count) recent threads. Deep dive view can be added next."
@@ -229,6 +275,20 @@ struct ContentView: View {
     private var firstName: String {
         let parts = NSFullUserName().split(separator: " ")
         return parts.first.map(String.init) ?? "Operator"
+    }
+
+    private var timeOfDayGreeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12:
+            return "Good morning"
+        case 12..<17:
+            return "Good afternoon"
+        case 17..<22:
+            return "Good evening"
+        default:
+            return "Burning the midnight oil"
+        }
     }
 }
 

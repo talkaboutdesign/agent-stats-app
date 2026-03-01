@@ -339,6 +339,8 @@ actor CodexAnalyzer {
         var bestUsageModel = ""
         var lastSeenModel = ""
         var sessionDate: Date?
+        var sessionThreadID: String?
+        var parentThreadID: String?
         var modelCounts: [String: Int] = [:]
         var sourceCounts: [String: Int] = [:]
         var eventTypeCounts: [String: Int] = [:]
@@ -362,11 +364,15 @@ actor CodexAnalyzer {
                 if sessionDate == nil, let timestamp = payload["timestamp"] as? String {
                     sessionDate = parseISO8601(timestamp)
                 }
+                if sessionThreadID == nil, let threadID = payload["id"] as? String {
+                    sessionThreadID = threadID.lowercased()
+                }
 
-                if let source = payload["source"] as? String {
+                if let source = payload["source"] {
                     sourceCounts[sourceDisplayName(source), default: 0] += 1
-                } else if let source = payload["source"] {
-                    sourceCounts[jsonString(source), default: 0] += 1
+                    if parentThreadID == nil {
+                        parentThreadID = subagentParentThreadID(from: source)
+                    }
                 }
                 if let modelProvider = payload["model_provider"] as? String {
                     modelCounts[modelProvider, default: 0] += 1
@@ -452,6 +458,8 @@ actor CodexAnalyzer {
             sourceCounts: sourceCounts,
             eventTypeCounts: eventTypeCounts,
             toolCounts: toolCounts,
+            sessionThreadID: sessionThreadID,
+            parentThreadID: parentThreadID,
             usage: usage
         )
     }
@@ -816,22 +824,51 @@ actor CodexAnalyzer {
 
         guard let data = source.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) else {
-            return sourceDisplayName(source)
+            return sourceDisplayName(source as Any)
         }
-        return sourceDisplayName(jsonString(object))
+        return sourceDisplayName(object)
     }
 
-    private func sourceDisplayName(_ source: String) -> String {
-        switch source.lowercased() {
-        case "vscode":
-            return "Cursor / VS Code"
-        case "exec":
-            return "Exec"
-        case "cli":
-            return "CLI"
-        default:
-            return source
+    private func sourceDisplayName(_ source: Any) -> String {
+        if let source = source as? String {
+            switch source.lowercased() {
+            case "vscode":
+                return "Cursor / VS Code"
+            case "exec":
+                return "Exec"
+            case "cli":
+                return "CLI"
+            default:
+                return source
+            }
         }
+
+        if let dict = source as? [String: Any],
+           let subagent = dict["subagent"] as? [String: Any],
+           let threadSpawn = subagent["thread_spawn"] as? [String: Any] {
+            let role = (threadSpawn["agent_role"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let nickname = (threadSpawn["agent_nickname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let role, !role.isEmpty, let nickname, !nickname.isEmpty {
+                return "CLI (Subagent \(role): \(nickname))"
+            }
+            if let role, !role.isEmpty {
+                return "CLI (Subagent \(role))"
+            }
+            return "CLI (Subagent)"
+        }
+
+        return jsonString(source)
+    }
+
+    private func subagentParentThreadID(from source: Any) -> String? {
+        guard let dict = source as? [String: Any],
+              let subagent = dict["subagent"] as? [String: Any],
+              let threadSpawn = subagent["thread_spawn"] as? [String: Any],
+              let parentThreadID = threadSpawn["parent_thread_id"] as? String else {
+            return nil
+        }
+        return parentThreadID.lowercased()
     }
 
     private func jsonString(_ object: Any) -> String {

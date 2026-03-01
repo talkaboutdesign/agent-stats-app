@@ -203,7 +203,39 @@ struct SessionFileSummary: Codable, Hashable {
     let sourceCounts: [String: Int]
     let eventTypeCounts: [String: Int]
     let toolCounts: [String: Int]
+    let sessionThreadID: String?
+    let parentThreadID: String?
     let usage: SessionUsage?
+
+    init(
+        path: String,
+        archived: Bool,
+        modifiedAt: Date,
+        fileSizeBytes: Int64,
+        lineCount: Int,
+        tokenTotal: Int64,
+        modelCounts: [String: Int],
+        sourceCounts: [String: Int],
+        eventTypeCounts: [String: Int],
+        toolCounts: [String: Int],
+        sessionThreadID: String? = nil,
+        parentThreadID: String? = nil,
+        usage: SessionUsage?
+    ) {
+        self.path = path
+        self.archived = archived
+        self.modifiedAt = modifiedAt
+        self.fileSizeBytes = fileSizeBytes
+        self.lineCount = lineCount
+        self.tokenTotal = tokenTotal
+        self.modelCounts = modelCounts
+        self.sourceCounts = sourceCounts
+        self.eventTypeCounts = eventTypeCounts
+        self.toolCounts = toolCounts
+        self.sessionThreadID = sessionThreadID
+        self.parentThreadID = parentThreadID
+        self.usage = usage
+    }
 }
 
 struct CodexAnalysisResult {
@@ -280,6 +312,108 @@ extension Date {
 extension Double {
     var currency: String {
         NumberFormatters.currency.string(from: NSNumber(value: self)) ?? "$0.00"
+    }
+}
+
+extension String {
+    var modelDisplayName: String {
+        let raw = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return raw }
+
+        let lowered = raw.lowercased()
+        if lowered == "multiple" {
+            return "Multiple"
+        }
+
+        if let claude = formattedClaudeModelName(from: lowered) {
+            return claude
+        }
+        if let codex = formattedCodexModelName(from: lowered) {
+            return codex
+        }
+
+        return fallbackModelDisplayName(from: lowered)
+    }
+
+    private func formattedClaudeModelName(from lowered: String) -> String? {
+        guard lowered.hasPrefix("claude-") else { return nil }
+
+        var parts = lowered.split(separator: "-").map(String.init)
+        guard parts.count >= 2 else { return "Claude" }
+
+        if let last = parts.last, last.count == 8, Int(last) != nil {
+            parts.removeLast()
+        }
+
+        guard parts.count >= 2 else { return "Claude" }
+        let family = parts[1].capitalized
+
+        var version: String?
+        if parts.count >= 4, Int(parts[2]) != nil, Int(parts[3]) != nil {
+            version = "\(parts[2]).\(parts[3])"
+        } else if parts.count >= 3 {
+            version = parts[2]
+        }
+
+        if let version, !version.isEmpty {
+            return "Claude \(family) \(version)"
+        }
+        return "Claude \(family)"
+    }
+
+    private func formattedCodexModelName(from lowered: String) -> String? {
+        guard lowered.hasPrefix("gpt-"), lowered.contains("-codex") else { return nil }
+
+        var sparkSuffix = ""
+        if lowered.hasSuffix("-spark") {
+            sparkSuffix = " Spark"
+        }
+
+        guard let codexRange = lowered.range(of: "-codex") else {
+            return "Codex"
+        }
+        let versionSlice = lowered[lowered.index(lowered.startIndex, offsetBy: 4) ..< codexRange.lowerBound]
+        let versionToken = String(versionSlice)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            .replacingOccurrences(of: "-", with: ".")
+
+        if versionToken.isEmpty {
+            return "Codex\(sparkSuffix)"
+        }
+        return "Codex \(versionToken)\(sparkSuffix)"
+    }
+
+    private func fallbackModelDisplayName(from lowered: String) -> String {
+        let parts = lowered.split(separator: "-").map(String.init)
+        guard !parts.isEmpty else { return self }
+
+        if parts.count > 1, let last = parts.last, last.count == 8, Int(last) != nil {
+            return parts.dropLast().map { prettifyToken($0) }.joined(separator: " ")
+        }
+        return parts.map { prettifyToken($0) }.joined(separator: " ")
+    }
+
+    private func prettifyToken(_ token: String) -> String {
+        switch token {
+        case "gpt":
+            return "GPT"
+        case "codex":
+            return "Codex"
+        case "claude":
+            return "Claude"
+        case "sonnet":
+            return "Sonnet"
+        case "haiku":
+            return "Haiku"
+        case "opus":
+            return "Opus"
+        case "spark":
+            return "Spark"
+        case "openai":
+            return "OpenAI"
+        default:
+            return token.capitalized
+        }
     }
 }
 
