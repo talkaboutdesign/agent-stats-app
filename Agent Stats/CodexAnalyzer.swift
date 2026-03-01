@@ -19,14 +19,20 @@ actor CodexAnalyzer {
         var logWarnCount = 0
 
         var threads: [ThreadSummary] = []
+        var sessionUsages: [SessionUsage] = []
         var modelCounts: [String: Int] = [:]
         var sourceCounts: [String: Int] = [:]
         var eventTypeCounts: [String: Int] = [:]
         var toolCounts: [String: Int] = [:]
     }
 
-    func analyze(codexURL: URL) async throws -> CodexSnapshot {
+    func analyze(
+        codexURL: URL,
+        cachedFileSummaries: [String: SessionFileSummary]
+    ) async throws -> CodexAnalysisResult {
         var analysis = MutableAnalysis()
+        var refreshedFileSummaries: [SessionFileSummary] = []
+        refreshedFileSummaries.reserveCapacity(cachedFileSummaries.count + 64)
 
         let codexSizeBytes = directorySize(at: codexURL)
 
@@ -47,11 +53,23 @@ actor CodexAnalyzer {
         }
 
         for file in sessionFiles {
-            parseSessionJSONL(file, archived: false, into: &analysis)
+            processSessionFile(
+                file,
+                archived: false,
+                cachedFileSummaries: cachedFileSummaries,
+                into: &analysis,
+                refreshedFileSummaries: &refreshedFileSummaries
+            )
         }
 
         for file in archivedFiles {
-            parseSessionJSONL(file, archived: true, into: &analysis)
+            processSessionFile(
+                file,
+                archived: true,
+                cachedFileSummaries: cachedFileSummaries,
+                into: &analysis,
+                refreshedFileSummaries: &refreshedFileSummaries
+            )
         }
 
         let rulesAllowCount = parseRulesAllowCount(codexURL.appendingPathComponent("rules/default.rules"))
@@ -68,7 +86,7 @@ actor CodexAnalyzer {
             ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast)
         }
 
-        return CodexSnapshot(
+        let snapshot = CodexSnapshot(
             codexPath: codexURL.path,
             generatedAt: Date(),
             codexSizeBytes: codexSizeBytes,
@@ -89,10 +107,16 @@ actor CodexAnalyzer {
             logErrorCount: analysis.logErrorCount,
             logWarnCount: analysis.logWarnCount,
             threads: Array(sortedThreads.prefix(250)),
+            sessionUsages: analysis.sessionUsages,
             modelCounts: topCounts(analysis.modelCounts, limit: 20),
             sourceCounts: topCounts(analysis.sourceCounts, limit: 20),
             eventTypeCounts: topCounts(analysis.eventTypeCounts, limit: 20),
             toolCounts: topCounts(analysis.toolCounts, limit: 30)
+        )
+
+        return CodexAnalysisResult(
+            snapshot: snapshot,
+            fileSummaries: refreshedFileSummaries
         )
     }
 
@@ -166,19 +190,99 @@ actor CodexAnalyzer {
         }
     }
 
-    private func parseSessionJSONL(_ url: URL, archived: Bool, into analysis: inout MutableAnalysis) {
-        guard let reader = FileLineReader(url: url) else {
+    private func processSessionFile(
+        _ url: URL,
+        archived: Bool,
+        cachedFileSummaries: [String: SessionFileSummary],
+        into analysis: inout MutableAnalysis,
+        refreshedFileSummaries: inout [SessionFileSummary]
+    ) {
+        let path = url.path
+        let modifiedAt = modificationDate(for: url) ?? .distantPast
+        let currentFileSize = fileSize(url)
+
+        if let cached = cachedFileSummaries[path],
+           cached.archived == archived,
+           cached.modifiedAt == modifiedAt,
+           cached.fileSizeBytes == currentFileSize {
+            applySessionSummary(cached, into: &analysis)
+            refreshedFileSummaries.append(cached)
             return
         }
 
-        var maxTokenTotalForFile: Int64 = 0
+        let parsed = parseSessionJSONL(
+            url,
+            archived: archived,
+            modifiedAt: modifiedAt,
+            fileSizeBytes: currentFileSize
+        )
+        applySessionSummary(parsed, into: &analysis)
+        refreshedFileSummaries.append(parsed)
+    }
 
-        for line in reader {
-            if archived {
-                analysis.archivedSessionLineCount += 1
-            } else {
-                analysis.sessionLineCount += 1
-            }
+    private func applySessionSummary(_ summary: SessionFileSummary, into analysis: inout MutableAnalysis) {
+        if summary.archived {
+            analysis.archivedSessionLineCount += summary.lineCount
+        } else {
+            analysis.sessionLineCount += summary.lineCount
+        }
+
+        analysis.totalTokensFromEventFiles += summary.tokenTotal
+        merge(summary.modelCounts, into: &analysis.modelCounts)
+        merge(summary.sourceCounts, into: &analysis.sourceCounts)
+        merge(summary.eventTypeCounts, into: &analysis.eventTypeCounts)
+        merge(summary.toolCounts, into: &analysis.toolCounts)
+
+        if let usage = summary.usage {
+            analysis.sessionUsages.append(usage)
+        }
+    }
+
+    private func merge(_ incoming: [String: Int], into target: inout [String: Int]) {
+        for (key, value) in incoming {
+            target[key, default: 0] += value
+        }
+    }
+
+    private func parseSessionJSONL(
+        _ url: URL,
+        archived: Bool,
+        modifiedAt: Date,
+        fileSizeBytes: Int64
+    ) -> SessionFileSummary {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return SessionFileSummary(
+                path: url.path,
+                archived: archived,
+                modifiedAt: modifiedAt,
+                fileSizeBytes: fileSizeBytes,
+                lineCount: 0,
+                tokenTotal: 0,
+                modelCounts: [:],
+                sourceCounts: [:],
+                eventTypeCounts: [:],
+                toolCounts: [:],
+                usage: nil
+            )
+        }
+
+        var lineCount = 0
+        var maxTokenTotalForFile: Int64 = 0
+        var bestUsageInputTokens: Int64 = 0
+        var bestUsageCachedInputTokens: Int64 = 0
+        var bestUsageOutputTokens: Int64 = 0
+        var bestUsageReasoningOutputTokens: Int64 = 0
+        var bestUsageModel = ""
+        var lastSeenModel = ""
+        var sessionDate: Date?
+        var modelCounts: [String: Int] = [:]
+        var sourceCounts: [String: Int] = [:]
+        var eventTypeCounts: [String: Int] = [:]
+        var toolCounts: [String: Int] = [:]
+
+        for lineSlice in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(lineSlice)
+            lineCount += 1
 
             guard let data = line.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -186,14 +290,22 @@ actor CodexAnalyzer {
                 continue
             }
 
+            if sessionDate == nil, let timestamp = root["timestamp"] as? String {
+                sessionDate = parseISO8601(timestamp)
+            }
+
             if type == "session_meta", let payload = root["payload"] as? [String: Any] {
+                if sessionDate == nil, let timestamp = payload["timestamp"] as? String {
+                    sessionDate = parseISO8601(timestamp)
+                }
+
                 if let source = payload["source"] as? String {
-                    analysis.sourceCounts[source, default: 0] += 1
+                    sourceCounts[sourceDisplayName(source), default: 0] += 1
                 } else if let source = payload["source"] {
-                    analysis.sourceCounts[jsonString(source), default: 0] += 1
+                    sourceCounts[jsonString(source), default: 0] += 1
                 }
                 if let modelProvider = payload["model_provider"] as? String {
-                    analysis.modelCounts[modelProvider, default: 0] += 1
+                    modelCounts[modelProvider, default: 0] += 1
                 }
                 continue
             }
@@ -205,18 +317,26 @@ actor CodexAnalyzer {
             switch type {
             case "turn_context":
                 if let model = payload["model"] as? String {
-                    analysis.modelCounts[model, default: 0] += 1
+                    modelCounts[model, default: 0] += 1
+                    lastSeenModel = model
                 }
 
             case "event_msg":
                 if let eventType = payload["type"] as? String {
-                    analysis.eventTypeCounts[eventType, default: 0] += 1
+                    eventTypeCounts[eventType, default: 0] += 1
 
                     if eventType == "token_count",
                        let info = payload["info"] as? [String: Any],
                        let totalTokenUsage = info["total_token_usage"] as? [String: Any],
                        let totalTokens = int64Value(totalTokenUsage["total_tokens"]) {
-                        maxTokenTotalForFile = max(maxTokenTotalForFile, totalTokens)
+                        if totalTokens > maxTokenTotalForFile {
+                            maxTokenTotalForFile = totalTokens
+                            bestUsageInputTokens = int64Value(totalTokenUsage["input_tokens"]) ?? 0
+                            bestUsageCachedInputTokens = int64Value(totalTokenUsage["cached_input_tokens"]) ?? 0
+                            bestUsageOutputTokens = int64Value(totalTokenUsage["output_tokens"]) ?? 0
+                            bestUsageReasoningOutputTokens = int64Value(totalTokenUsage["reasoning_output_tokens"]) ?? 0
+                            bestUsageModel = lastSeenModel
+                        }
                     }
                 }
 
@@ -228,7 +348,7 @@ actor CodexAnalyzer {
                 if payloadType == "function_call" || payloadType == "custom_tool_call",
                    let toolName = payload["name"] as? String,
                    !toolName.isEmpty {
-                    analysis.toolCounts[toolName, default: 0] += 1
+                    toolCounts[toolName, default: 0] += 1
                 }
 
             default:
@@ -236,7 +356,38 @@ actor CodexAnalyzer {
             }
         }
 
-        analysis.totalTokensFromEventFiles += maxTokenTotalForFile
+        let usage: SessionUsage?
+        if maxTokenTotalForFile > 0 {
+            let usageModel = bestUsageModel.isEmpty ? "<unknown>" : bestUsageModel
+            let usageDate = sessionDate ?? modifiedAt
+            usage = SessionUsage(
+                id: url.lastPathComponent,
+                date: usageDate,
+                model: usageModel,
+                inputTokens: bestUsageInputTokens,
+                cachedInputTokens: bestUsageCachedInputTokens,
+                outputTokens: bestUsageOutputTokens,
+                reasoningOutputTokens: bestUsageReasoningOutputTokens,
+                totalTokens: maxTokenTotalForFile,
+                archived: archived
+            )
+        } else {
+            usage = nil
+        }
+
+        return SessionFileSummary(
+            path: url.path,
+            archived: archived,
+            modifiedAt: modifiedAt,
+            fileSizeBytes: fileSizeBytes,
+            lineCount: lineCount,
+            tokenTotal: maxTokenTotalForFile,
+            modelCounts: modelCounts,
+            sourceCounts: sourceCounts,
+            eventTypeCounts: eventTypeCounts,
+            toolCounts: toolCounts,
+            usage: usage
+        )
     }
 
     private func parseRulesAllowCount(_ rulesURL: URL) -> Int {
@@ -287,14 +438,15 @@ actor CodexAnalyzer {
     }
 
     private func parseLogFileCounts(_ logURL: URL) -> (errors: Int, warnings: Int) {
-        guard let reader = FileLineReader(url: logURL) else {
+        guard let text = try? String(contentsOf: logURL, encoding: .utf8) else {
             return (0, 0)
         }
 
         var errors = 0
         var warnings = 0
 
-        for line in reader {
+        for lineSlice in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(lineSlice)
             if line.contains(" ERROR ") || line.hasSuffix(" ERROR") {
                 errors += 1
             }
@@ -377,6 +529,18 @@ actor CodexAnalyzer {
         return Int64(values?.fileSize ?? 0)
     }
 
+    private func modificationDate(for url: URL) -> Date? {
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        return values?.contentModificationDate
+    }
+
+    private func parseISO8601(_ string: String) -> Date? {
+        if let value = iso8601FullFormatter.date(from: string) {
+            return value
+        }
+        return iso8601Formatter.date(from: string)
+    }
+
     private func normalizedSource(_ source: String) -> String {
         guard !source.isEmpty else {
             return "<unknown>"
@@ -384,9 +548,22 @@ actor CodexAnalyzer {
 
         guard let data = source.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) else {
+            return sourceDisplayName(source)
+        }
+        return sourceDisplayName(jsonString(object))
+    }
+
+    private func sourceDisplayName(_ source: String) -> String {
+        switch source.lowercased() {
+        case "vscode":
+            return "Cursor / VS Code"
+        case "exec":
+            return "Exec"
+        case "cli":
+            return "CLI"
+        default:
             return source
         }
-        return jsonString(object)
     }
 
     private func jsonString(_ object: Any) -> String {
@@ -446,56 +623,16 @@ actor CodexAnalyzer {
         }
         return String(cString: pointer)
     }
-}
 
-private final class FileLineReader: Sequence, IteratorProtocol {
-    private let delimiter = Data([0x0A])
-    private let handle: FileHandle
-    private var buffer = Data()
-    private var isEOF = false
+    private let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
-    init?(url: URL) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return nil
-        }
-        self.handle = handle
-    }
-
-    deinit {
-        try? handle.close()
-    }
-
-    func makeIterator() -> FileLineReader {
-        self
-    }
-
-    func next() -> String? {
-        while true {
-            if let range = buffer.range(of: delimiter) {
-                let lineData = buffer.subdata(in: 0..<range.lowerBound)
-                buffer.removeSubrange(0..<range.upperBound)
-                return String(decoding: lineData, as: UTF8.self)
-            }
-
-            if isEOF {
-                if buffer.isEmpty {
-                    return nil
-                }
-                let line = String(decoding: buffer, as: UTF8.self)
-                buffer.removeAll(keepingCapacity: false)
-                return line
-            }
-
-            do {
-                let chunk = try handle.read(upToCount: 64 * 1024)
-                if let chunk, !chunk.isEmpty {
-                    buffer.append(chunk)
-                } else {
-                    isEOF = true
-                }
-            } catch {
-                isEOF = true
-            }
-        }
-    }
+    private let iso8601FullFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 }

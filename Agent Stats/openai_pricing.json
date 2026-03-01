@@ -1,0 +1,43 @@
+{
+  "source": "https://developers.openai.com/api/docs/pricing",
+  "capturedAt": "2026-03-01",
+  "type": "standard",
+  "models": [
+    {
+      "model": "gpt-5.3-codex",
+      "inputPerM": 1.75,
+      "cachedInputPerM": 0.175,
+      "outputPerM": 14.0
+    },
+    {
+      "model": "gpt-5.2-codex",
+      "inputPerM": 1.75,
+      "cachedInputPerM": 0.175,
+      "outputPerM": 14.0
+    },
+    {
+      "model": "gpt-5.1-codex",
+      "inputPerM": 1.25,
+      "cachedInputPerM": 0.125,
+      "outputPerM": 10.0
+    },
+    {
+      "model": "gpt-5.1-codex-mini",
+      "inputPerM": 0.25,
+      "cachedInputPerM": 0.025,
+      "outputPerM": 2.0
+    },
+    {
+      "model": "gpt-5-codex",
+      "inputPerM": 1.25,
+      "cachedInputPerM": 0.125,
+      "outputPerM": 10.0
+    },
+    {
+      "model": "codex-mini-latest",
+      "inputPerM": 1.5,
+      "cachedInputPerM": 0.375,
+      "outputPerM": 6.0
+    }
+  ]
+}
