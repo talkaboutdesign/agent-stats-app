@@ -58,21 +58,131 @@ struct SessionUsage: Identifiable, Hashable, Codable {
     let id: String
     let date: Date
     let model: String
+    let provider: String
     let inputTokens: Int64
     let cachedInputTokens: Int64
+    let cacheWriteTokens: Int64
+    let cacheWrite5mTokens: Int64
+    let cacheWrite1hTokens: Int64
     let outputTokens: Int64
     let reasoningOutputTokens: Int64
     let totalTokens: Int64
     let archived: Bool
+
+    nonisolated init(
+        id: String,
+        date: Date,
+        model: String,
+        provider: String,
+        inputTokens: Int64,
+        cachedInputTokens: Int64,
+        cacheWriteTokens: Int64 = 0,
+        cacheWrite5mTokens: Int64 = 0,
+        cacheWrite1hTokens: Int64 = 0,
+        outputTokens: Int64,
+        reasoningOutputTokens: Int64,
+        totalTokens: Int64,
+        archived: Bool
+    ) {
+        self.id = id
+        self.date = date
+        self.model = model
+        self.provider = provider
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cacheWrite5mTokens = cacheWrite5mTokens
+        self.cacheWrite1hTokens = cacheWrite1hTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+        self.totalTokens = totalTokens
+        self.archived = archived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case date
+        case model
+        case provider
+        case inputTokens
+        case cachedInputTokens
+        case cacheWriteTokens
+        case cacheWrite5mTokens
+        case cacheWrite1hTokens
+        case outputTokens
+        case reasoningOutputTokens
+        case totalTokens
+        case archived
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        date = try container.decode(Date.self, forKey: .date)
+        model = try container.decode(String.self, forKey: .model)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider)
+            ?? (model.lowercased().hasPrefix("claude-") ? "Claude" : "Codex")
+        inputTokens = try container.decodeIfPresent(Int64.self, forKey: .inputTokens) ?? 0
+        cachedInputTokens = try container.decodeIfPresent(Int64.self, forKey: .cachedInputTokens) ?? 0
+        cacheWriteTokens = try container.decodeIfPresent(Int64.self, forKey: .cacheWriteTokens) ?? 0
+        cacheWrite5mTokens = try container.decodeIfPresent(Int64.self, forKey: .cacheWrite5mTokens) ?? 0
+        cacheWrite1hTokens = try container.decodeIfPresent(Int64.self, forKey: .cacheWrite1hTokens) ?? 0
+        outputTokens = try container.decodeIfPresent(Int64.self, forKey: .outputTokens) ?? 0
+        reasoningOutputTokens = try container.decodeIfPresent(Int64.self, forKey: .reasoningOutputTokens) ?? 0
+        totalTokens = try container.decodeIfPresent(Int64.self, forKey: .totalTokens) ?? 0
+        archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+    }
 }
 
 struct ModelPricing: Codable, Hashable, Identifiable {
     let model: String
+    let provider: String?
     let inputPerM: Double
     let cachedInputPerM: Double?
+    let cacheWritePerM: Double?
+    let cacheWrite1hPerM: Double?
     let outputPerM: Double?
 
     var id: String { model }
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case provider
+        case inputPerM
+        case cachedInputPerM
+        case cacheWritePerM
+        case cacheWrite1hPerM
+        case outputPerM
+    }
+
+    init(
+        model: String,
+        provider: String?,
+        inputPerM: Double,
+        cachedInputPerM: Double?,
+        cacheWritePerM: Double?,
+        cacheWrite1hPerM: Double?,
+        outputPerM: Double?
+    ) {
+        self.model = model
+        self.provider = provider
+        self.inputPerM = inputPerM
+        self.cachedInputPerM = cachedInputPerM
+        self.cacheWritePerM = cacheWritePerM
+        self.cacheWrite1hPerM = cacheWrite1hPerM
+        self.outputPerM = outputPerM
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        model = try container.decode(String.self, forKey: .model)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider)
+        inputPerM = try container.decode(Double.self, forKey: .inputPerM)
+        cachedInputPerM = try container.decodeIfPresent(Double.self, forKey: .cachedInputPerM)
+        cacheWritePerM = try container.decodeIfPresent(Double.self, forKey: .cacheWritePerM)
+        cacheWrite1hPerM = try container.decodeIfPresent(Double.self, forKey: .cacheWrite1hPerM)
+        outputPerM = try container.decodeIfPresent(Double.self, forKey: .outputPerM)
+    }
 }
 
 struct PricingSnapshot: Codable, Hashable {
@@ -116,6 +226,35 @@ struct ModelCostRow: Identifiable, Hashable {
     var id: String { model }
 }
 
+struct LiveSessionRow: Identifiable, Hashable {
+    let id: String
+    let provider: String
+    let source: String
+    let model: String
+    let lastUpdated: Date
+    let totalTokens: Int64
+    let rawTotalTokens: Int64
+    let estimatedCost: Double
+    let archived: Bool
+
+    var isActiveNow: Bool {
+        guard !archived else { return false }
+        return Date().timeIntervalSince(lastUpdated) <= 15 * 60
+    }
+}
+
+struct ProviderLimitStatus: Identifiable, Hashable {
+    let provider: String
+    let plan: String
+    let renewalDate: Date?
+    let usageSummary: String
+    let source: String
+    let lastCheckedAt: Date
+    let errorText: String?
+
+    var id: String { provider }
+}
+
 struct CostSummary {
     let today: Double
     let thisWeek: Double
@@ -134,18 +273,30 @@ extension Int64 {
 
 extension Date {
     var friendly: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: self)
+        DateFormatters.friendly.string(from: self)
     }
 }
 
 extension Double {
     var currency: String {
+        NumberFormatters.currency.string(from: NSNumber(value: self)) ?? "$0.00"
+    }
+}
+
+private enum DateFormatters {
+    static let friendly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+}
+
+private enum NumberFormatters {
+    static let currency: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: self)) ?? "$0.00"
-    }
+        return formatter
+    }()
 }

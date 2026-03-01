@@ -1,0 +1,70 @@
+{
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "capturedAt": "2026-03-01",
+  "type": "standard",
+  "models": [
+    {
+      "model": "claude-opus-4-6",
+      "provider": "Claude",
+      "inputPerM": 5.0,
+      "cachedInputPerM": 0.5,
+      "cacheWritePerM": 6.25,
+      "cacheWrite1hPerM": 10.0,
+      "outputPerM": 25.0
+    },
+    {
+      "model": "claude-opus-4-5",
+      "provider": "Claude",
+      "inputPerM": 5.0,
+      "cachedInputPerM": 0.5,
+      "cacheWritePerM": 6.25,
+      "cacheWrite1hPerM": 10.0,
+      "outputPerM": 25.0
+    },
+    {
+      "model": "claude-opus-4-5-20251101",
+      "provider": "Claude",
+      "inputPerM": 5.0,
+      "cachedInputPerM": 0.5,
+      "cacheWritePerM": 6.25,
+      "cacheWrite1hPerM": 10.0,
+      "outputPerM": 25.0
+    },
+    {
+      "model": "claude-sonnet-4-5",
+      "provider": "Claude",
+      "inputPerM": 3.0,
+      "cachedInputPerM": 0.3,
+      "cacheWritePerM": 3.75,
+      "cacheWrite1hPerM": 6.0,
+      "outputPerM": 15.0
+    },
+    {
+      "model": "claude-sonnet-4-5-20250929",
+      "provider": "Claude",
+      "inputPerM": 3.0,
+      "cachedInputPerM": 0.3,
+      "cacheWritePerM": 3.75,
+      "cacheWrite1hPerM": 6.0,
+      "outputPerM": 15.0
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "provider": "Claude",
+      "inputPerM": 1.0,
+      "cachedInputPerM": 0.1,
+      "cacheWritePerM": 1.25,
+      "cacheWrite1hPerM": 2.0,
+      "outputPerM": 5.0
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "Claude",
+      "inputPerM": 1.0,
+      "cachedInputPerM": 0.1,
+      "cacheWritePerM": 1.25,
+      "cacheWrite1hPerM": 2.0,
+      "outputPerM": 5.0
+    }
+  ]
+}
