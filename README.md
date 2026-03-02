@@ -2,7 +2,7 @@
 
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/talkaboutdesign/agent-stats-app?utm_source=oss&utm_medium=github&utm_campaign=talkaboutdesign%2Fagent-stats-app&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
-Agent Stats is an open source macOS SwiftUI app for analyzing local AI agent activity from Codex and Claude CLI sessions.
+Agent Stats is an open-source macOS SwiftUI app for analyzing local AI agent activity from Codex and Claude CLI sessions.
 
 It gives you a live dashboard for:
 - Session/thread activity
@@ -49,7 +49,7 @@ No external telemetry pipeline is required for core dashboard functionality.
 
 ## Requirements
 
-- macOS
+- macOS 26.2 or later
 - Xcode 15+ (or newer)
 
 ## Run
