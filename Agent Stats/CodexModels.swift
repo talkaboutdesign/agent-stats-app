@@ -1,13 +1,13 @@
 import Foundation
 
-struct CountStat: Identifiable, Hashable, Codable {
+nonisolated struct CountStat: Identifiable, Hashable, Codable {
     let key: String
     let count: Int
 
     var id: String { key }
 }
 
-struct ThreadSummary: Identifiable, Hashable, Codable {
+nonisolated struct ThreadSummary: Identifiable, Hashable, Codable {
     let id: String
     let rolloutPath: String?
     let createdAt: Date?
@@ -23,7 +23,7 @@ struct ThreadSummary: Identifiable, Hashable, Codable {
     let gitBranch: String
 }
 
-struct CodexSnapshot: Codable {
+nonisolated struct CodexSnapshot: Codable {
     let codexPath: String
     let generatedAt: Date
     let codexSizeBytes: Int64
@@ -55,7 +55,7 @@ struct CodexSnapshot: Codable {
     let toolCounts: [CountStat]
 }
 
-struct SessionUsage: Identifiable, Hashable, Codable {
+nonisolated struct SessionUsage: Identifiable, Hashable, Codable {
     let id: String
     let date: Date
     let model: String
@@ -135,7 +135,7 @@ struct SessionUsage: Identifiable, Hashable, Codable {
     }
 }
 
-struct ModelPricing: Codable, Hashable, Identifiable {
+nonisolated struct ModelPricing: Codable, Hashable, Identifiable {
     let model: String
     let provider: String?
     let inputPerM: Double
@@ -186,14 +186,14 @@ struct ModelPricing: Codable, Hashable, Identifiable {
     }
 }
 
-struct PricingSnapshot: Codable, Hashable {
+nonisolated struct PricingSnapshot: Codable, Hashable {
     let source: String
     let capturedAt: String
     let type: String
     let models: [ModelPricing]
 }
 
-struct SessionFileSummary: Codable, Hashable {
+nonisolated struct SessionFileSummary: Codable, Hashable {
     let path: String
     let archived: Bool
     let modifiedAt: Date
@@ -239,19 +239,19 @@ struct SessionFileSummary: Codable, Hashable {
     }
 }
 
-struct CodexAnalysisResult {
+nonisolated struct CodexAnalysisResult {
     let snapshot: CodexSnapshot
     let fileSummaries: [SessionFileSummary]
 }
 
-struct CostPoint: Identifiable, Hashable {
+nonisolated struct CostPoint: Identifiable, Hashable {
     let date: Date
     let cost: Double
 
     var id: Date { date }
 }
 
-struct ModelCostRow: Identifiable, Hashable {
+nonisolated struct ModelCostRow: Identifiable, Hashable {
     let model: String
     let cost: Double
     let sessions: Int
@@ -259,7 +259,7 @@ struct ModelCostRow: Identifiable, Hashable {
     var id: String { model }
 }
 
-struct LiveSessionRow: Identifiable, Hashable {
+nonisolated struct LiveSessionRow: Identifiable, Hashable {
     let id: String
     let provider: String
     let source: String
@@ -276,7 +276,7 @@ struct LiveSessionRow: Identifiable, Hashable {
     }
 }
 
-struct ProviderLimitStatus: Identifiable, Hashable {
+nonisolated struct ProviderLimitStatus: Identifiable, Hashable {
     let provider: String
     let plan: String
     let renewalDate: Date?
@@ -288,7 +288,7 @@ struct ProviderLimitStatus: Identifiable, Hashable {
     var id: String { provider }
 }
 
-struct CostSummary {
+nonisolated struct CostSummary {
     let today: Double
     let thisWeek: Double
     let thisMonth: Double

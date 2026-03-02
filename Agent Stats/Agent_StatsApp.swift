@@ -1,5 +1,5 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 @main
 struct Agent_StatsApp: App {
@@ -17,7 +17,8 @@ struct Agent_StatsApp: App {
         }
 
         let context = ModelContext(modelContainer)
-        _model = State(initialValue: AppModel(modelContext: context))
+        let snapshotStore = SwiftDataSnapshotStore(modelContext: context)
+        _model = State(initialValue: AppModel(snapshotStore: snapshotStore))
     }
 
     var body: some Scene {

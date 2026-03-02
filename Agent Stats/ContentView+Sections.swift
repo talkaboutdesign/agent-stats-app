@@ -12,14 +12,9 @@ private enum BentoCardHeight {
 
 extension ContentView {
     func dashboardView(_ snapshot: CodexSnapshot) -> some View {
-        let recentSessions = Array(model.liveSessions.prefix(5))
-        let liveCount = model.liveSessions.filter(\.isActiveNow).count
+        let dashboardVM = DashboardViewModel(snapshot: snapshot, liveSessions: model.liveSessions)
         let twoCol = responsiveContentWidth >= 740
-        let workModels = topModelNames(from: snapshot.sessionUsages, limit: 5)
-        let workColorScale = modelColorScale(for: workModels)
-        let hourlyModelPoints = hourlyModelUsage(snapshot, models: workModels)
-        let dailyModelPoints = dailyModelActivity(snapshot, models: workModels)
-        let activityHeatmap = activityByDay(snapshot.sessionUsages)
+        let workColorScale = modelColorScale(for: dashboardVM.topModels)
 
         return VStack(spacing: 10) {
             LazyVGrid(columns: flexibleColumns(twoCol ? 4 : 2), spacing: 10) {
@@ -32,11 +27,11 @@ extension ContentView {
             if twoCol {
                 Grid(alignment: .topLeading, horizontalSpacing: 10, verticalSpacing: 10) {
                     GridRow {
-                        dashboardDailyActivityCard(points: dailyModelPoints, colors: workColorScale)
+                        dashboardDailyActivityCard(points: dashboardVM.dailyModelPoints, colors: workColorScale)
                         ModelHourlyStackedCard(
                             title: "Peak Hours",
                             subtitle: "By model",
-                            points: hourlyModelPoints,
+                            points: dashboardVM.hourlyModelPoints,
                             colors: workColorScale
                         )
                     }
@@ -57,8 +52,8 @@ extension ContentView {
                     GridRow {
                         LiveSessionCardGrid(
                             title: "Recent Sessions",
-                            subtitle: liveCount > 0 ? "\(liveCount) live" : "",
-                            rows: recentSessions,
+                            subtitle: dashboardVM.liveCount > 0 ? "\(dashboardVM.liveCount) live" : "",
+                            rows: dashboardVM.recentSessions,
                             maxRows: 5
                         )
                         .gridCellColumns(2)
@@ -66,11 +61,11 @@ extension ContentView {
                 }
             } else {
                 VStack(spacing: 10) {
-                    dashboardDailyActivityCard(points: dailyModelPoints, colors: workColorScale)
+                    dashboardDailyActivityCard(points: dashboardVM.dailyModelPoints, colors: workColorScale)
                     ModelHourlyStackedCard(
                         title: "Peak Hours",
                         subtitle: "By model",
-                        points: hourlyModelPoints,
+                        points: dashboardVM.hourlyModelPoints,
                         colors: workColorScale
                     )
                     CostByModelCard(
@@ -87,8 +82,8 @@ extension ContentView {
                     )
                     LiveSessionCardGrid(
                         title: "Recent Sessions",
-                        subtitle: liveCount > 0 ? "\(liveCount) live" : "",
-                        rows: recentSessions,
+                        subtitle: dashboardVM.liveCount > 0 ? "\(dashboardVM.liveCount) live" : "",
+                        rows: dashboardVM.recentSessions,
                         maxRows: 5
                     )
                 }
@@ -96,7 +91,7 @@ extension ContentView {
 
             ActivityHeatmapCard(
                 title: "Activity Heatmap",
-                countsByDay: activityHeatmap
+                countsByDay: dashboardVM.activityHeatmap
             )
         }
         .padding(.bottom, 16)
@@ -148,17 +143,12 @@ extension ContentView {
         }
 
         let width = responsiveContentWidth
-        let cutoff = sessionHistoryRange.cutoff()
-        let recentRows = model.liveSessions.filter { $0.lastUpdated >= cutoff }
-        let rangeModelRows = modelRows(from: recentRows)
-        let rangeCost = recentRows.reduce(0.0) { $0 + $1.estimatedCost }
-        let rangeTokens = recentRows.reduce(Int64(0)) { $0 + $1.totalTokens }
-        let liveNow = recentRows.filter(\.isActiveNow).count
+        let pricingVM = PricingViewModel(
+            liveSessions: model.liveSessions,
+            cutoff: sessionHistoryRange.cutoff()
+        )
         let pairedChartCardMinHeight: CGFloat = BentoCardHeight.large
-        let trendModels = Array(rangeModelRows.prefix(5).map(\.model))
-        let trendColors = modelColorScale(for: trendModels)
-        let modelCostTrends = modelCostTrendPoints(from: recentRows, models: trendModels, cutoff: cutoff)
-        let modelUsageTrends = modelUsageTrendPoints(from: recentRows, models: trendModels, cutoff: cutoff)
+        let trendColors = modelColorScale(for: pricingVM.trendModels)
 
         return AnyView(
             VStack(spacing: 14) {
@@ -173,13 +163,13 @@ extension ContentView {
 
                 let columns = metricColumns(for: width)
                 LazyVGrid(columns: columns, spacing: 10) {
-                    MetricCard(title: "Sessions", value: number(recentRows.count), icon: "clock")
+                    MetricCard(title: "Sessions", value: number(pricingVM.recentRows.count), icon: "clock")
                         .frame(minHeight: BentoCardHeight.small)
-                    MetricCard(title: "Est. Cost", value: rangeCost.currency, icon: "dollarsign.circle")
+                    MetricCard(title: "Est. Cost", value: pricingVM.rangeCost.currency, icon: "dollarsign.circle")
                         .frame(minHeight: BentoCardHeight.small)
-                    MetricCard(title: "Tokens", value: number(rangeTokens), icon: "number")
+                    MetricCard(title: "Tokens", value: number(pricingVM.rangeTokens), icon: "number")
                         .frame(minHeight: BentoCardHeight.small)
-                    MetricCard(title: "Live Now", value: number(liveNow), icon: "waveform.path.ecg")
+                    MetricCard(title: "Live Now", value: number(pricingVM.liveNow), icon: "waveform.path.ecg")
                         .frame(minHeight: BentoCardHeight.small)
                 }
 
@@ -187,7 +177,7 @@ extension ContentView {
                 LazyVGrid(columns: chartColumns, spacing: 10) {
                     CostByModelCard(
                         title: "Cost by Model",
-                        rows: rangeModelRows,
+                        rows: pricingVM.rangeModelRows,
                         rowLimit: 10,
                         minHeight: pairedChartCardMinHeight
                     )
@@ -195,7 +185,7 @@ extension ContentView {
                     ModelMultiLineChartCard(
                         title: "Model Cost Trend",
                         subtitle: sessionHistoryRange.rawValue,
-                        points: modelCostTrends,
+                        points: pricingVM.modelCostTrends,
                         colors: trendColors,
                         minHeight: pairedChartCardMinHeight
                     )
@@ -204,7 +194,7 @@ extension ContentView {
                 ModelMultiLineChartCard(
                     title: "Model Usage Trend",
                     subtitle: sessionHistoryRange.rawValue,
-                    points: modelUsageTrends,
+                    points: pricingVM.modelUsageTrends,
                     colors: trendColors,
                     minHeight: BentoCardHeight.medium
                 )
@@ -212,8 +202,8 @@ extension ContentView {
                 SessionPricingList(
                     title: "Session History (\(sessionHistoryRange.title))",
                     subtitle: "Codex + Claude daily rollup (sessions, tokens, and estimated cost)",
-                    rows: recentRows,
-                    maxRows: recentRows.count
+                    rows: pricingVM.recentRows,
+                    maxRows: pricingVM.recentRows.count
                 )
 
                 if !costSummary.unmatchedModels.isEmpty {
@@ -229,10 +219,7 @@ extension ContentView {
     }
 
     func threadsView(_ snapshot: CodexSnapshot) -> some View {
-        let normalizedTokensByThread = normalizedTokensByThreadID(snapshot.sessionUsages)
-        let modelByRolloutPath = modelByRolloutPath(snapshot.sessionUsages)
-        let displayedThreads = filteredThreads(snapshot.threads)
-        let sessionTokenTotal = snapshot.sessionUsages.reduce(Int64(0)) { $0 + displayTokens(for: $1) }
+        let threadsVM = ThreadsViewModel(snapshot: snapshot)
         let width = responsiveContentWidth
 
         return VStack(spacing: 14) {
@@ -244,7 +231,7 @@ extension ContentView {
                     .frame(minHeight: BentoCardHeight.small)
                 MetricCard(title: "Archived Threads", value: number(snapshot.archivedThreads), icon: "archivebox")
                     .frame(minHeight: BentoCardHeight.small)
-                MetricCard(title: "Session Tokens", value: number(sessionTokenTotal), icon: "number")
+                MetricCard(title: "Session Tokens", value: number(threadsVM.sessionTokenTotal), icon: "number")
                     .frame(minHeight: BentoCardHeight.small)
             }
 
@@ -253,7 +240,7 @@ extension ContentView {
                     .font(.headline)
 
                 Group {
-                    if displayedThreads.isEmpty {
+                    if threadsVM.displayedThreads.isEmpty {
                         Text("No threads available.")
                             .font(.callout)
                             .foregroundStyle(UITheme.textMuted)
@@ -271,10 +258,9 @@ extension ContentView {
 
                                 Divider().overlay(UITheme.border)
 
-                                ForEach(Array(displayedThreads.enumerated()), id: \.element.id) { index, thread in
-                                    let resolvedModel = thread.rolloutPath.flatMap { modelByRolloutPath[$0] }
-                                        ?? thread.modelProvider.modelDisplayName
-                                    let threadTokens = normalizedTokensByThread[thread.id] ?? Int64(thread.tokensUsed)
+                                ForEach(Array(threadsVM.displayedThreads.enumerated()), id: \.element.id) { index, thread in
+                                    let resolvedModel = threadsVM.resolvedModel(for: thread)
+                                    let threadTokens = threadsVM.threadTokens(for: thread)
                                     let detail = [thread.source, thread.gitBranch]
                                         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                                         .joined(separator: " • ")
@@ -303,7 +289,7 @@ extension ContentView {
                                     .padding(.vertical, 8)
                                     .background(index.isMultiple(of: 2) ? Color.clear : UITheme.surfaceAlt.opacity(0.28))
 
-                                    if index < displayedThreads.count - 1 {
+                                    if index < threadsVM.displayedThreads.count - 1 {
                                         Divider().overlay(UITheme.border.opacity(0.65))
                                     }
                                 }
@@ -322,10 +308,9 @@ extension ContentView {
 
                                 Divider().overlay(UITheme.border)
 
-                                ForEach(Array(displayedThreads.enumerated()), id: \.element.id) { index, thread in
-                                    let resolvedModel = thread.rolloutPath.flatMap { modelByRolloutPath[$0] }
-                                        ?? thread.modelProvider.modelDisplayName
-                                    let threadTokens = normalizedTokensByThread[thread.id] ?? Int64(thread.tokensUsed)
+                                ForEach(Array(threadsVM.displayedThreads.enumerated()), id: \.element.id) { index, thread in
+                                    let resolvedModel = threadsVM.resolvedModel(for: thread)
+                                    let threadTokens = threadsVM.threadTokens(for: thread)
 
                                     HStack(spacing: 8) {
                                         threadTextCell(thread.updatedAt?.friendly ?? "-")
@@ -338,7 +323,7 @@ extension ContentView {
                                     .padding(.vertical, 8)
                                     .background(index.isMultiple(of: 2) ? Color.clear : UITheme.surfaceAlt.opacity(0.28))
 
-                                    if index < displayedThreads.count - 1 {
+                                    if index < threadsVM.displayedThreads.count - 1 {
                                         Divider().overlay(UITheme.border.opacity(0.65))
                                     }
                                 }
@@ -361,243 +346,12 @@ extension ContentView {
         NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
     }
 
-    private func overviewDailyActivity() -> [CostPoint] {
-        guard let daily = model.costSummary?.daily else {
-            return []
-        }
-        return Array(daily.suffix(30))
-    }
-
-    private func displayTokens(for usage: SessionUsage) -> Int64 {
-        let uncachedInput = usage.provider == "Codex"
-            ? max(usage.inputTokens - usage.cachedInputTokens, 0)
-            : usage.inputTokens
-        return max(uncachedInput + usage.outputTokens, 0)
-    }
-
-    private func normalizedTokensByThreadID(_ usages: [SessionUsage]) -> [String: Int64] {
-        var map: [String: Int64] = [:]
-        for usage in usages where usage.provider == "Codex" {
-            guard let threadID = codexThreadID(from: usage.id) else { continue }
-            map[threadID] = max(map[threadID] ?? 0, displayTokens(for: usage))
-        }
-        return map
-    }
-
-    private func modelByRolloutPath(_ usages: [SessionUsage]) -> [String: String] {
-        var map: [String: (updatedAt: Date, model: String)] = [:]
-        for usage in usages where usage.provider == "Codex" {
-            guard usage.id.hasPrefix("codex:") else { continue }
-            let path = String(usage.id.dropFirst("codex:".count))
-            if let existing = map[path], existing.updatedAt >= usage.date {
-                continue
-            }
-            map[path] = (usage.date, usage.model.modelDisplayName)
-        }
-        return map.mapValues(\.model)
-    }
-
-    private func filteredThreads(_ threads: [ThreadSummary]) -> [ThreadSummary] {
-        threads.filter { thread in
-            thread.updatedAt != nil
-                || !thread.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !thread.modelProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || thread.tokensUsed > 0
-                || !thread.gitBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-    }
-
-    private func codexThreadID(from usageID: String) -> String? {
-        guard usageID.hasPrefix("codex:") else { return nil }
-        let path = String(usageID.dropFirst("codex:".count))
-        let basename = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased()
-        let pattern = #"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(basename.startIndex..., in: basename)
-        guard let match = regex.firstMatch(in: basename, range: range),
-              let swiftRange = Range(match.range, in: basename) else {
-            return nil
-        }
-        return String(basename[swiftRange])
-    }
-
-    private func modelRows(from sessions: [LiveSessionRow]) -> [ModelCostRow] {
-        var grouped: [String: (cost: Double, sessions: Int)] = [:]
-
-        for row in sessions {
-            let modelName = row.model.modelDisplayName
-            var aggregate = grouped[modelName] ?? (cost: 0, sessions: 0)
-            aggregate.cost += row.estimatedCost
-            aggregate.sessions += 1
-            grouped[modelName] = aggregate
-        }
-
-        return grouped.map { model, aggregate in
-            ModelCostRow(model: model, cost: aggregate.cost, sessions: aggregate.sessions)
-        }
-        .sorted { lhs, rhs in
-            if lhs.cost == rhs.cost {
-                return lhs.model < rhs.model
-            }
-            return lhs.cost > rhs.cost
-        }
-    }
-
-    private func topModelNames(from usages: [SessionUsage], limit: Int) -> [String] {
-        var counts: [String: Int] = [:]
-        for usage in usages {
-            counts[usage.model.modelDisplayName, default: 0] += 1
-        }
-        return counts.sorted { lhs, rhs in
-            if lhs.value == rhs.value {
-                return lhs.key < rhs.key
-            }
-            return lhs.value > rhs.value
-        }
-        .prefix(limit)
-        .map(\.key)
-    }
-
     private func modelColorScale(for models: [String]) -> [String: Color] {
         var scale: [String: Color] = [:]
         for model in models {
             scale[model] = UITheme.modelColor(for: model)
         }
         return scale
-    }
-
-    private func dailyModelActivity(_ snapshot: CodexSnapshot, models: [String]) -> [ModelSeriesPoint] {
-        guard !models.isEmpty else { return [] }
-        let calendar = Calendar.current
-        let modelSet = Set(models)
-        let end = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .day, value: -29, to: end) ?? end
-        var buckets: [String: [Date: Double]] = [:]
-
-        for usage in snapshot.sessionUsages {
-            let modelName = usage.model.modelDisplayName
-            guard modelSet.contains(modelName) else { continue }
-            let day = calendar.startOfDay(for: usage.date)
-            guard day >= start, day <= end else { continue }
-            buckets[modelName, default: [:]][day, default: 0] += 1
-        }
-
-        var points: [ModelSeriesPoint] = []
-        var cursor = start
-        while cursor <= end {
-            for model in models {
-                points.append(ModelSeriesPoint(date: cursor, model: model, value: buckets[model]?[cursor] ?? 0))
-            }
-            cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end.addingTimeInterval(1)
-        }
-        return points
-    }
-
-    private func hourlyModelUsage(_ snapshot: CodexSnapshot, models: [String]) -> [ModelHourlyUsagePoint] {
-        guard !models.isEmpty else { return [] }
-        let modelSet = Set(models)
-        var bucketByModelHour: [String: [Int: Double]] = [:]
-
-        for usage in snapshot.sessionUsages {
-            let modelName = usage.model.modelDisplayName
-            guard modelSet.contains(modelName) else { continue }
-            let hour = Calendar.current.component(.hour, from: usage.date)
-            bucketByModelHour[modelName, default: [:]][hour, default: 0] += 1
-        }
-
-        var points: [ModelHourlyUsagePoint] = []
-        for model in models {
-            for hour in 0..<24 {
-                let count = bucketByModelHour[model]?[hour] ?? 0
-                points.append(ModelHourlyUsagePoint(hour: hour, model: model, count: count))
-            }
-        }
-        return points
-    }
-
-    private func activityByDay(_ usages: [SessionUsage]) -> [Date: Int] {
-        let calendar = Calendar.current
-        var counts: [Date: Int] = [:]
-        for usage in usages {
-            let day = calendar.startOfDay(for: usage.date)
-            counts[day, default: 0] += 1
-        }
-        return counts
-    }
-
-    private func dayBuckets(from cutoff: Date, to endDate: Date = Date()) -> [Date] {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: cutoff)
-        let end = calendar.startOfDay(for: endDate)
-        guard start <= end else { return [] }
-
-        var dates: [Date] = []
-        var current = start
-        while current <= end {
-            dates.append(current)
-            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
-            current = next
-        }
-        return dates
-    }
-
-    private func modelCostTrendPoints(
-        from sessions: [LiveSessionRow],
-        models: [String],
-        cutoff: Date
-    ) -> [ModelSeriesPoint] {
-        trendPoints(
-            from: sessions,
-            models: models,
-            cutoff: cutoff
-        ) { row in row.estimatedCost }
-    }
-
-    private func modelUsageTrendPoints(
-        from sessions: [LiveSessionRow],
-        models: [String],
-        cutoff: Date
-    ) -> [ModelSeriesPoint] {
-        trendPoints(
-            from: sessions,
-            models: models,
-            cutoff: cutoff
-        ) { _ in 1 }
-    }
-
-    private func trendPoints(
-        from sessions: [LiveSessionRow],
-        models: [String],
-        cutoff: Date,
-        valueForRow: (LiveSessionRow) -> Double
-    ) -> [ModelSeriesPoint] {
-        guard !models.isEmpty else { return [] }
-
-        let calendar = Calendar.current
-        let buckets = dayBuckets(from: cutoff)
-        let modelSet = Set(models)
-        var grouped: [String: [Date: Double]] = [:]
-
-        for row in sessions {
-            let modelName = row.model.modelDisplayName
-            guard modelSet.contains(modelName) else { continue }
-            let day = calendar.startOfDay(for: row.lastUpdated)
-            grouped[modelName, default: [:]][day, default: 0] += valueForRow(row)
-        }
-
-        var points: [ModelSeriesPoint] = []
-        for model in models {
-            for day in buckets {
-                points.append(
-                    ModelSeriesPoint(
-                        date: day,
-                        model: model,
-                        value: grouped[model]?[day] ?? 0
-                    )
-                )
-            }
-        }
-        return points
     }
 
     private var responsiveContentWidth: CGFloat {
@@ -643,5 +397,4 @@ extension ContentView {
             .minimumScaleFactor(0.85)
             .frame(maxWidth: .infinity, alignment: alignment)
     }
-
 }

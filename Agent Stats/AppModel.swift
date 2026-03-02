@@ -16,35 +16,83 @@ final class AppModel {
     var pricingSnapshot: PricingSnapshot?
     var pricingSnapshots: [PricingSnapshot] = []
 
-    @ObservationIgnored private let analyzer = CodexAnalyzer()
-    @ObservationIgnored private let modelContext: ModelContext
-    @ObservationIgnored private let jsonDecoder = JSONDecoder()
-    @ObservationIgnored private let jsonEncoder = JSONEncoder()
+    @ObservationIgnored private let analyzer: SnapshotAnalyzing
+    @ObservationIgnored private let snapshotStore: SnapshotStoring
+    @ObservationIgnored private let pricingLoader: PricingLoading
+    @ObservationIgnored private let providerLimitFetcher: ProviderLimitFetching
+    @ObservationIgnored private let costCalculator: CostCalculating
+    @ObservationIgnored private let liveSessionBuilder: LiveSessionBuilding
+    @ObservationIgnored private let environment: FileSystemEnvironment
+
     @ObservationIgnored private var sessionFileSummaries: [SessionFileSummary] = []
     @ObservationIgnored private var liveRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var providerLimitTask: Task<Void, Never>?
 
-    init(modelContext: ModelContext) {
-        self.modelContext = modelContext
-        pricingSnapshots = loadPricingSnapshots()
-        pricingSnapshot = mergedPricingSnapshot(pricingSnapshots)
-        loadPersistedSnapshotIfAvailable()
+    init(
+        snapshotStore: SnapshotStoring,
+        analyzer: SnapshotAnalyzing,
+        pricingLoader: PricingLoading,
+        providerLimitFetcher: ProviderLimitFetching,
+        costCalculator: CostCalculating,
+        liveSessionBuilder: LiveSessionBuilding,
+        environment: FileSystemEnvironment
+    ) {
+        self.snapshotStore = snapshotStore
+        self.analyzer = analyzer
+        self.pricingLoader = pricingLoader
+        self.providerLimitFetcher = providerLimitFetcher
+        self.costCalculator = costCalculator
+        self.liveSessionBuilder = liveSessionBuilder
+        self.environment = environment
 
-        codexURL = defaultCodexURLIfPresent()
-        sessionFileSummaries = Array(loadCachedSessionFileSummaries().values)
-        recalculateLiveSessions()
+        pricingSnapshots = pricingLoader.loadPricingSnapshots()
+        pricingSnapshot = pricingLoader.mergedPricingSnapshot(pricingSnapshots)
+
+        if let persisted = snapshotStore.loadPersistedSnapshot() {
+            snapshot = persisted.snapshot
+            statusText = "Loaded cached data from \(persisted.updatedAt.friendly)"
+        }
+
+        codexURL = environment.codexExists() ? environment.codexURL : nil
+        sessionFileSummaries = Array(snapshotStore.loadCachedSessionFileSummaries().values)
+        recalculateDerivedState()
         refreshProviderLimits()
         startLiveRefreshLoop()
 
-        if codexURL != nil || claudeExists() {
+        if codexURL != nil || environment.claudeExists() {
             refresh()
         }
+    }
+
+    convenience init(snapshotStore: SnapshotStoring) {
+        self.init(
+            snapshotStore: snapshotStore,
+            analyzer: CodexAnalyzer(),
+            pricingLoader: BundlePricingLoader(),
+            providerLimitFetcher: CLIProviderLimitFetcher(),
+            costCalculator: CostService(),
+            liveSessionBuilder: LiveSessionService(),
+            environment: FileSystemEnvironment()
+        )
+    }
+
+    convenience init(modelContext: ModelContext) {
+        let store = SwiftDataSnapshotStore(modelContext: modelContext)
+        self.init(snapshotStore: store)
+    }
+
+    deinit {
+        liveRefreshTask?.cancel()
+        refreshTask?.cancel()
+        providerLimitTask?.cancel()
     }
 
     var codexPathLabel: String {
         guard let codexURL else {
             return "~/.codex (not found)"
         }
-        return abbreviateHome(codexURL.path)
+        return environment.abbreviateHome(codexURL.path)
     }
 
     var pricingStatusLabel: String {
@@ -61,59 +109,67 @@ final class AppModel {
     func refresh() {
         guard !isLoading else { return }
 
-        let defaultURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-        let codexExists = FileManager.default.fileExists(atPath: defaultURL.path)
-        let claudeAvailable = claudeExists()
+        let defaultURL = environment.codexURL
+        let codexExists = environment.codexExists()
+        let claudeAvailable = environment.claudeExists()
 
         guard codexExists || claudeAvailable else {
             errorText = "No readable ~/.codex or ~/.claude folder found."
             return
         }
 
-        let cachedSummaries = loadCachedSessionFileSummaries()
+        let cachedSummaries = snapshotStore.loadCachedSessionFileSummaries()
 
-        let targetURL = defaultURL
-        codexURL = targetURL
+        codexURL = defaultURL
         errorText = nil
         statusText = cachedSummaries.isEmpty
             ? "Analyzing .codex + .claude data..."
             : "Refreshing changed .codex/.claude files..."
         isLoading = true
 
-        Task {
+        refreshTask?.cancel()
+        refreshTask = Task {
             do {
                 let result = try await analyzer.analyze(
-                    codexURL: targetURL,
+                    codexURL: defaultURL,
                     cachedFileSummaries: cachedSummaries
                 )
 
+                if Task.isCancelled {
+                    isLoading = false
+                    return
+                }
+
                 snapshot = result.snapshot
                 sessionFileSummaries = result.fileSummaries
-                recalculateCosts()
+                recalculateDerivedState()
                 refreshProviderLimits()
-                persist(snapshot: result.snapshot, fileSummaries: result.fileSummaries)
+                snapshotStore.persist(snapshot: result.snapshot, fileSummaries: result.fileSummaries)
                 statusText = "Last refresh: \(result.snapshot.generatedAt.friendly)"
                 errorText = nil
             } catch {
                 statusText = "Failed"
-                errorText = "Unable to read \(abbreviateHome(targetURL.path)). \(error.localizedDescription)"
+                errorText = "Unable to read \(environment.abbreviateHome(defaultURL.path)). \(error.localizedDescription)"
             }
 
             isLoading = false
         }
     }
 
-    private func defaultCodexURLIfPresent() -> URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return nil
+    private func recalculateDerivedState() {
+        if let snapshot {
+            costSummary = costCalculator.calculateCostSummary(
+                snapshot: snapshot,
+                pricingSnapshot: pricingSnapshot
+            )
+        } else {
+            costSummary = nil
         }
-        return url
-    }
 
-    private func claudeExists() -> Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true)
-        return FileManager.default.fileExists(atPath: url.path)
+        liveSessions = liveSessionBuilder.buildLiveSessions(
+            fileSummaries: sessionFileSummaries,
+            pricingSnapshot: pricingSnapshot
+        )
     }
 
     private func startLiveRefreshLoop() {
@@ -131,698 +187,12 @@ final class AppModel {
         refresh()
     }
 
-    private func abbreviateHome(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
-        }
-        return path
-    }
-
-    private func loadPersistedSnapshotIfAvailable() {
-        let descriptor = FetchDescriptor<CachedSnapshotRecord>(
-            predicate: #Predicate { $0.key == "default" }
-        )
-
-        guard let record = try? modelContext.fetch(descriptor).first,
-              let persisted = try? jsonDecoder.decode(CodexSnapshot.self, from: record.payload) else {
-            return
-        }
-
-        snapshot = persisted
-        recalculateCosts()
-        statusText = "Loaded cached data from \(record.updatedAt.friendly)"
-    }
-
-    private func loadCachedSessionFileSummaries() -> [String: SessionFileSummary] {
-        let descriptor = FetchDescriptor<CachedSessionFileRecord>()
-        guard let records = try? modelContext.fetch(descriptor) else {
-            return [:]
-        }
-
-        var summaries: [String: SessionFileSummary] = [:]
-        summaries.reserveCapacity(records.count)
-
-        for record in records {
-            if let decoded = try? jsonDecoder.decode(SessionFileSummary.self, from: record.payload) {
-                // Force one-time reparse for older cache entries before source-name normalization.
-                if decoded.sourceCounts.keys.contains("vscode")
-                    || decoded.sourceCounts.keys.contains(where: { $0.contains("\"subagent\"") }) {
-                    continue
-                }
-                summaries[decoded.path] = decoded
-            }
-        }
-
-        return summaries
-    }
-
-    private func persist(snapshot: CodexSnapshot, fileSummaries: [SessionFileSummary]) {
-        do {
-            let snapshotPayload = try jsonEncoder.encode(snapshot)
-            let snapshotDescriptor = FetchDescriptor<CachedSnapshotRecord>(
-                predicate: #Predicate { $0.key == "default" }
-            )
-
-            if let existingSnapshot = try modelContext.fetch(snapshotDescriptor).first {
-                existingSnapshot.updatedAt = snapshot.generatedAt
-                existingSnapshot.payload = snapshotPayload
-            } else {
-                modelContext.insert(
-                    CachedSnapshotRecord(
-                        key: "default",
-                        updatedAt: snapshot.generatedAt,
-                        payload: snapshotPayload
-                    )
-                )
-            }
-
-            let fileDescriptor = FetchDescriptor<CachedSessionFileRecord>()
-            let existingFiles = try modelContext.fetch(fileDescriptor)
-            var existingByPath = Dictionary(uniqueKeysWithValues: existingFiles.map { ($0.path, $0) })
-            let currentPaths = Set(fileSummaries.map(\.path))
-
-            for summary in fileSummaries {
-                guard let payload = try? jsonEncoder.encode(summary) else {
-                    continue
-                }
-
-                if let existing = existingByPath.removeValue(forKey: summary.path) {
-                    existing.modifiedAt = summary.modifiedAt
-                    existing.payload = payload
-                } else {
-                    modelContext.insert(
-                        CachedSessionFileRecord(
-                            path: summary.path,
-                            modifiedAt: summary.modifiedAt,
-                            payload: payload
-                        )
-                    )
-                }
-            }
-
-            for stale in existingByPath.values where !currentPaths.contains(stale.path) {
-                modelContext.delete(stale)
-            }
-
-            try modelContext.save()
-        } catch {
-            // Keep UI responsive even if persistence fails.
-        }
-    }
-
-    private func recalculateCosts() {
-        guard let snapshot, let pricingSnapshot else {
-            costSummary = nil
-            return
-        }
-
-        let pricingByModel = Dictionary(
-            uniqueKeysWithValues: pricingSnapshot.models.map { ($0.model.lowercased(), $0) }
-        )
-
-        let calendar = Calendar.current
-        let now = Date()
-        let todayStart = calendar.startOfDay(for: now)
-        let weekInterval = calendar.dateInterval(of: .weekOfYear, for: now)
-        let monthInterval = calendar.dateInterval(of: .month, for: now)
-
-        var today = 0.0
-        var thisWeek = 0.0
-        var thisMonth = 0.0
-        var allTime = 0.0
-
-        var dailyCosts: [Date: Double] = [:]
-        var byModel: [String: (cost: Double, sessions: Int)] = [:]
-        var unmatched = Set<String>()
-
-        for usage in snapshot.sessionUsages {
-            let modelKey = canonicalModelName(usage.model, availableModels: pricingByModel)
-            guard let pricing = pricingByModel[modelKey] else {
-                unmatched.insert(usage.model)
-                continue
-            }
-
-            let usageCost = sessionCost(usage, pricing: pricing)
-            let day = calendar.startOfDay(for: usage.date)
-
-            allTime += usageCost
-            dailyCosts[day, default: 0] += usageCost
-
-            if day == todayStart {
-                today += usageCost
-            }
-            if let weekInterval, usage.date >= weekInterval.start, usage.date < weekInterval.end {
-                thisWeek += usageCost
-            }
-            if let monthInterval, usage.date >= monthInterval.start, usage.date < monthInterval.end {
-                thisMonth += usageCost
-            }
-
-            let modelLabel = pricing.model
-            var row = byModel[modelLabel, default: (0, 0)]
-            row.cost += usageCost
-            row.sessions += 1
-            byModel[modelLabel] = row
-        }
-
-        let modelRows = byModel
-            .map { ModelCostRow(model: $0.key, cost: $0.value.cost, sessions: $0.value.sessions) }
-            .sorted { lhs, rhs in
-                if lhs.cost == rhs.cost { return lhs.model < rhs.model }
-                return lhs.cost > rhs.cost
-            }
-
-        let daily = dailyCosts
-            .map { CostPoint(date: $0.key, cost: $0.value) }
-            .sorted { $0.date < $1.date }
-
-        costSummary = CostSummary(
-            today: today,
-            thisWeek: thisWeek,
-            thisMonth: thisMonth,
-            allTime: allTime,
-            modelRows: modelRows,
-            daily: daily,
-            unmatchedModels: Array(unmatched).sorted()
-        )
-
-        recalculateLiveSessions()
-    }
-
-    private func recalculateLiveSessions() {
-        guard !sessionFileSummaries.isEmpty else {
-            liveSessions = []
-            return
-        }
-
-        let pricingByModel = Dictionary(
-            uniqueKeysWithValues: (pricingSnapshot?.models ?? []).map { ($0.model.lowercased(), $0) }
-        )
-
-        struct SourceRow {
-            var row: LiveSessionRow
-            let threadID: String?
-            let parentThreadID: String?
-        }
-
-        enum RollupTarget: Hashable {
-            case root(Int)
-            case orphan(String)
-        }
-
-        var rows: [SourceRow] = []
-        rows.reserveCapacity(sessionFileSummaries.count)
-
-        for summary in sessionFileSummaries {
-            guard let usage = summary.usage else { continue }
-            let source = dominantSource(from: summary.sourceCounts, provider: usage.provider)
-            let canonicalModel = canonicalModelName(usage.model, availableModels: pricingByModel)
-            let cost = pricingByModel[canonicalModel].map { sessionCost(usage, pricing: $0) } ?? 0
-            let displayTokens = displayTokenCount(usage)
-            let threadID = resolvedThreadID(for: summary, usage: usage)
-
-            rows.append(
-                SourceRow(
-                    row: LiveSessionRow(
-                        id: usage.id,
-                        provider: usage.provider,
-                        source: source,
-                        model: usage.model,
-                        lastUpdated: summary.modifiedAt,
-                        totalTokens: displayTokens,
-                        rawTotalTokens: usage.totalTokens,
-                        estimatedCost: cost,
-                        archived: usage.archived
-                    ),
-                    threadID: threadID,
-                    parentThreadID: summary.parentThreadID
-                )
-            )
-        }
-
-        var indexByThreadID: [String: Int] = [:]
-        indexByThreadID.reserveCapacity(rows.count)
-
-        for (index, item) in rows.enumerated() {
-            guard let threadID = item.threadID else { continue }
-            indexByThreadID[threadID] = index
-        }
-
-        var hiddenIndexes = Set<Int>()
-        var targetCache: [Int: RollupTarget] = [:]
-        var orphanGroups: [String: LiveSessionRow] = [:]
-
-        func resolveRollupTarget(_ index: Int, visiting: inout Set<Int>) -> RollupTarget {
-            if let cached = targetCache[index] {
-                return cached
-            }
-
-            guard let parentThreadID = rows[index].parentThreadID, !parentThreadID.isEmpty else {
-                let resolved: RollupTarget = .root(index)
-                targetCache[index] = resolved
-                return resolved
-            }
-
-            if visiting.contains(index) {
-                let resolved: RollupTarget = .orphan(parentThreadID)
-                targetCache[index] = resolved
-                return resolved
-            }
-
-            visiting.insert(index)
-            defer { visiting.remove(index) }
-
-            guard let parentIndex = indexByThreadID[parentThreadID], parentIndex != index else {
-                let resolved: RollupTarget = .orphan(parentThreadID)
-                targetCache[index] = resolved
-                return resolved
-            }
-
-            let resolved = resolveRollupTarget(parentIndex, visiting: &visiting)
-            targetCache[index] = resolved
-            return resolved
-        }
-
-        for childIndex in rows.indices {
-            guard rows[childIndex].parentThreadID != nil else { continue }
-
-            var visiting = Set<Int>()
-            let target = resolveRollupTarget(childIndex, visiting: &visiting)
-
-            switch target {
-            case .root(let rootIndex):
-                guard rootIndex != childIndex else { continue }
-                rows[rootIndex].row = mergedSessionRow(parent: rows[rootIndex].row, child: rows[childIndex].row)
-                hiddenIndexes.insert(childIndex)
-
-            case .orphan(let key):
-                let groupKey = key.isEmpty ? (rows[childIndex].threadID ?? rows[childIndex].row.id) : key
-                let existing = orphanGroups[groupKey] ?? syntheticMainSessionRow(from: rows[childIndex].row, groupKey: groupKey)
-                orphanGroups[groupKey] = mergedSessionRow(parent: existing, child: rows[childIndex].row)
-                hiddenIndexes.insert(childIndex)
-            }
-        }
-
-        var mergedRows: [LiveSessionRow] = rows.enumerated().compactMap { index, sourceRow in
-            guard !hiddenIndexes.contains(index) else { return nil }
-            return sourceRow.row
-        }
-
-        mergedRows.append(contentsOf: orphanGroups.values)
-
-        liveSessions = mergedRows.sorted { lhs, rhs in
-            if lhs.lastUpdated == rhs.lastUpdated {
-                return lhs.id > rhs.id
-            }
-            return lhs.lastUpdated > rhs.lastUpdated
-        }
-    }
-
-    private func dominantSource(from sourceCounts: [String: Int], provider: String) -> String {
-        guard let best = sourceCounts.max(by: { lhs, rhs in
-            if lhs.value == rhs.value {
-                return lhs.key > rhs.key
-            }
-            return lhs.value < rhs.value
-        })?.key else {
-            return provider
-        }
-        return best
-    }
-
-    private func resolvedThreadID(for summary: SessionFileSummary, usage: SessionUsage) -> String? {
-        if let threadID = summary.sessionThreadID, !threadID.isEmpty {
-            return threadID.lowercased()
-        }
-        if let extracted = uuidFromText(summary.path) {
-            return extracted
-        }
-        if let extracted = uuidFromText(usage.id) {
-            return extracted
-        }
-        return nil
-    }
-
-    private func uuidFromText(_ text: String) -> String? {
-        let lowered = text.lowercased()
-        let pattern = #"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(lowered.startIndex..., in: lowered)
-        guard let match = regex.firstMatch(in: lowered, range: range),
-              let swiftRange = Range(match.range, in: lowered) else {
-            return nil
-        }
-        return String(lowered[swiftRange])
-    }
-
-    private func mergedSessionRow(parent: LiveSessionRow, child: LiveSessionRow) -> LiveSessionRow {
-        let mergedProvider = parent.provider == child.provider ? parent.provider : "Mixed"
-        let mergedModel = parent.model == child.model ? parent.model : "Multiple"
-        let mergedUpdatedAt = max(parent.lastUpdated, child.lastUpdated)
-        let mergedArchived = parent.archived && child.archived
-
-        return LiveSessionRow(
-            id: parent.id,
-            provider: mergedProvider,
-            source: parent.source,
-            model: mergedModel,
-            lastUpdated: mergedUpdatedAt,
-            totalTokens: parent.totalTokens + child.totalTokens,
-            rawTotalTokens: parent.rawTotalTokens + child.rawTotalTokens,
-            estimatedCost: parent.estimatedCost + child.estimatedCost,
-            archived: mergedArchived
-        )
-    }
-
-    private func syntheticMainSessionRow(from row: LiveSessionRow, groupKey: String) -> LiveSessionRow {
-        LiveSessionRow(
-            id: "main:\(groupKey)",
-            provider: row.provider,
-            source: "CLI (Main Session)",
-            model: row.model,
-            lastUpdated: row.lastUpdated,
-            totalTokens: 0,
-            rawTotalTokens: 0,
-            estimatedCost: 0,
-            archived: row.archived
-        )
-    }
-
-    private func canonicalModelName(
-        _ model: String,
-        availableModels: [String: ModelPricing]
-    ) -> String {
-        let lowered = model.lowercased()
-        if availableModels[lowered] != nil {
-            return lowered
-        }
-
-        if let strippedDate = stripClaudeDateSuffix(lowered), availableModels[strippedDate] != nil {
-            return strippedDate
-        }
-
-        if lowered.hasSuffix("-spark") {
-            let base = String(lowered.dropLast("-spark".count))
-            if availableModels[base] != nil {
-                return base
-            }
-        }
-
-        return lowered
-    }
-
-    private func displayTokenCount(_ usage: SessionUsage) -> Int64 {
-        let uncachedInput = usage.provider == "Codex"
-            ? max(usage.inputTokens - usage.cachedInputTokens, 0)
-            : usage.inputTokens
-        return max(uncachedInput + usage.outputTokens, 0)
-    }
-
-    private func sessionCost(_ usage: SessionUsage, pricing: ModelPricing) -> Double {
-        let includesCachedInInput = usage.provider == "Codex"
-        let rawInputTokens = Double(usage.inputTokens)
-        let cachedInputTokens = Double(usage.cachedInputTokens)
-        let billableInputTokens = includesCachedInInput
-            ? max(rawInputTokens - cachedInputTokens, 0)
-            : rawInputTokens
-
-        let inputCost = billableInputTokens / 1_000_000.0 * pricing.inputPerM
-        let cachedInputCost = cachedInputTokens / 1_000_000.0 * (pricing.cachedInputPerM ?? 0)
-        let write5mTokens = usage.cacheWrite5mTokens > 0
-            ? usage.cacheWrite5mTokens
-            : max(usage.cacheWriteTokens - usage.cacheWrite1hTokens, 0)
-        let write1hTokens = usage.cacheWrite1hTokens
-        let cacheWrite5mCost = Double(write5mTokens) / 1_000_000.0 * (pricing.cacheWritePerM ?? 0)
-        let cacheWrite1hCost = Double(write1hTokens) / 1_000_000.0 * (pricing.cacheWrite1hPerM ?? pricing.cacheWritePerM ?? 0)
-        let outputCost = Double(usage.outputTokens) / 1_000_000.0 * (pricing.outputPerM ?? 0)
-        return inputCost + cachedInputCost + cacheWrite5mCost + cacheWrite1hCost + outputCost
-    }
-
     private func refreshProviderLimits() {
-        Task.detached(priority: .utility) {
-            let codex = Self.codexLimitStatusFromCLIAndAuth()
-            let claude = Self.claudeLimitStatusFromCLI()
-            let merged = [codex, claude].compactMap { $0 }
-            await MainActor.run {
-                self.providerLimits = merged.sorted { $0.provider < $1.provider }
-            }
+        providerLimitTask?.cancel()
+        providerLimitTask = Task {
+            let merged = await providerLimitFetcher.fetchProviderLimits()
+            if Task.isCancelled { return }
+            self.providerLimits = merged
         }
     }
-
-    nonisolated private static func codexLimitStatusFromCLIAndAuth() -> ProviderLimitStatus? {
-        let loginStatus = runCommand("codex", arguments: ["login", "status"], timeout: 4)
-        let loginSummary = loginStatus.map { squashWhitespace($0.stdout) } ?? ""
-
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let authURL = home.appendingPathComponent(".codex/auth.json")
-        guard let data = try? Data(contentsOf: authURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tokens = object["tokens"] as? [String: Any],
-              let idToken = tokens["id_token"] as? String,
-              let claims = decodeJWTClaims(idToken),
-              let auth = claims["https://api.openai.com/auth"] as? [String: Any] else {
-            return ProviderLimitStatus(
-                provider: "Codex",
-                plan: "Unknown",
-                renewalDate: nil,
-                usageSummary: loginSummary.isEmpty ? "Usage limits unavailable" : loginSummary,
-                source: "codex login status",
-                lastCheckedAt: Date(),
-                errorText: nil
-            )
-        }
-
-        let plan = (auth["chatgpt_plan_type"] as? String)?
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized ?? "ChatGPT"
-        let renewalDate = parseISO8601Date(auth["chatgpt_subscription_active_until"] as? String)
-        let lastChecked = parseISO8601Date(auth["chatgpt_subscription_last_checked"] as? String) ?? Date()
-        let usageSummary = loginSummary.isEmpty
-            ? "Live quota usage is not exposed by non-interactive Codex CLI."
-            : loginSummary
-
-        return ProviderLimitStatus(
-            provider: "Codex",
-            plan: plan,
-            renewalDate: renewalDate,
-            usageSummary: usageSummary,
-            source: loginSummary.isEmpty ? "local auth" : "codex login status + local auth",
-            lastCheckedAt: lastChecked,
-            errorText: nil
-        )
-    }
-
-    nonisolated private static func claudeLimitStatusFromCLI() -> ProviderLimitStatus? {
-        if let statusOutput = runCommand(
-            "claude",
-            arguments: ["-p", "/status", "--output-format", "text", "--verbose"],
-            timeout: 6
-        ), statusOutput.exitCode == 0 {
-            let message = squashWhitespace(statusOutput.stdout)
-            let lowered = message.lowercased()
-            if !message.isEmpty, !lowered.contains("unknown skill: status") {
-                return ProviderLimitStatus(
-                    provider: "Claude",
-                    plan: "Subscription",
-                    renewalDate: nil,
-                    usageSummary: message,
-                    source: "claude /status",
-                    lastCheckedAt: Date(),
-                    errorText: nil
-                )
-            }
-        }
-
-        if let accountOutput = runCommand(
-            "claude",
-            arguments: ["-p", "/account", "--output-format", "text", "--verbose"],
-            timeout: 6
-        ), accountOutput.exitCode == 0 {
-            let message = squashWhitespace(accountOutput.stdout)
-            let lowered = message.lowercased()
-
-            if !message.isEmpty, !lowered.contains("unknown skill: account") {
-                return ProviderLimitStatus(
-                    provider: "Claude",
-                    plan: "Subscription",
-                    renewalDate: nil,
-                    usageSummary: message,
-                    source: "claude /account",
-                    lastCheckedAt: Date(),
-                    errorText: nil
-                )
-            }
-        }
-
-        guard let output = runCommand("claude", arguments: ["auth", "status"], timeout: 4),
-              output.exitCode == 0 else {
-            return ProviderLimitStatus(
-                provider: "Claude",
-                plan: "Unknown",
-                renewalDate: nil,
-                usageSummary: "Usage limits unavailable",
-                source: "claude auth status",
-                lastCheckedAt: Date(),
-                errorText: nil
-            )
-        }
-
-        let outputText = squashWhitespace(output.stdout)
-        guard let data = output.stdout.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ProviderLimitStatus(
-                provider: "Claude",
-                plan: "Unknown",
-                renewalDate: nil,
-                usageSummary: outputText.isEmpty ? "Usage limits unavailable" : outputText,
-                source: "claude auth status",
-                lastCheckedAt: Date(),
-                errorText: nil
-            )
-        }
-
-        let subscriptionType = (object["subscriptionType"] as? String)?
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized ?? "Unknown"
-        let orgName = object["orgName"] as? String
-        let authMethod = object["authMethod"] as? String
-
-        var summaryParts: [String] = []
-        if let orgName, !orgName.isEmpty {
-            summaryParts.append(orgName)
-        }
-        if let authMethod, !authMethod.isEmpty {
-            summaryParts.append(authMethod)
-        }
-        if summaryParts.isEmpty {
-            summaryParts.append("Subscription")
-        }
-
-        return ProviderLimitStatus(
-            provider: "Claude",
-            plan: subscriptionType,
-            renewalDate: nil,
-            usageSummary: outputText.isEmpty ? "No renewal/remaining quota field from CLI auth status." : outputText,
-            source: summaryParts.joined(separator: " • "),
-            lastCheckedAt: Date(),
-            errorText: nil
-        )
-    }
-
-    nonisolated private static func runCommand(
-        _ executable: String,
-        arguments: [String],
-        timeout: TimeInterval
-    ) -> (stdout: String, stderr: String, exitCode: Int32)? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [executable] + arguments
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-
-        if process.isRunning {
-            process.terminate()
-            return nil
-        }
-
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-        return (stdout, stderr, process.terminationStatus)
-    }
-
-    nonisolated private static func decodeJWTClaims(_ token: String) -> [String: Any]? {
-        let segments = token.split(separator: ".")
-        guard segments.count >= 2 else { return nil }
-
-        let payload = String(segments[1])
-        let padded = payload + String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let payloadData = Data(base64Encoded: padded.replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")),
-            let object = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
-            return nil
-        }
-        return object
-    }
-
-    nonisolated private static func parseISO8601Date(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) {
-            return date
-        }
-        let basic = ISO8601DateFormatter()
-        basic.formatOptions = [.withInternetDateTime]
-        return basic.date(from: value)
-    }
-
-    nonisolated private static func squashWhitespace(_ text: String) -> String {
-        let parts = text.split(whereSeparator: \.isWhitespace)
-        return parts.joined(separator: " ")
-    }
-
-    private func loadPricingSnapshots() -> [PricingSnapshot] {
-        let names = ["openai_pricing", "claude_pricing"]
-        var snapshots: [PricingSnapshot] = []
-
-        for name in names {
-            guard let url = Bundle.main.url(forResource: name, withExtension: "json"),
-                  let data = try? Data(contentsOf: url),
-                  let snapshot = try? JSONDecoder().decode(PricingSnapshot.self, from: data) else {
-                continue
-            }
-            snapshots.append(snapshot)
-        }
-
-        return snapshots
-    }
-
-    private func mergedPricingSnapshot(_ snapshots: [PricingSnapshot]) -> PricingSnapshot? {
-        guard !snapshots.isEmpty else { return nil }
-
-        let mergedModels = snapshots.flatMap(\.models)
-        let mergedSource = snapshots.map(\.source).joined(separator: " + ")
-        let capturedAt = snapshots.map(\.capturedAt).joined(separator: " / ")
-
-        return PricingSnapshot(
-            source: mergedSource,
-            capturedAt: capturedAt,
-            type: "standard",
-            models: mergedModels
-        )
-    }
-
-    private func stripClaudeDateSuffix(_ model: String) -> String? {
-        let pattern = #"-\d{8}$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return nil
-        }
-        let range = NSRange(model.startIndex..., in: model)
-        guard let match = regex.firstMatch(in: model, range: range) else {
-            return nil
-        }
-        guard let swiftRange = Range(match.range, in: model) else {
-            return nil
-        }
-        return String(model[..<swiftRange.lowerBound])
-    }
-
 }
