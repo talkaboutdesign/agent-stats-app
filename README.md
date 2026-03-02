@@ -1,5 +1,7 @@
 # Agent Stats
 
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/talkaboutdesign/agent-stats-app?utm_source=oss&utm_medium=github&utm_campaign=talkaboutdesign%2Fagent-stats-app&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+
 Agent Stats is a macOS SwiftUI dashboard for local AI session analytics.
 
 It aggregates activity from local Codex and Claude session data and shows:
