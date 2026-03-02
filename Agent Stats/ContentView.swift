@@ -70,6 +70,50 @@ enum UITheme {
     static let accentB = Color(red: 0.35, green: 0.52, blue: 1.00)
     static let accentC = Color(red: 0.98, green: 0.74, blue: 0.26)
     static let danger = Color(red: 0.98, green: 0.41, blue: 0.50)
+
+    // Canonical model colors — keyword-matched, consistent across all charts
+    static func modelColor(for name: String) -> Color {
+        let lower = name.lowercased()
+
+        // Opus versions
+        if lower.contains("opus") && lower.contains("4.6") {
+            return Color(red: 0.35, green: 0.52, blue: 1.00)   // bright blue
+        }
+        if lower.contains("opus") && lower.contains("4.5") {
+            return Color(red: 0.68, green: 0.42, blue: 0.98)   // purple
+        }
+        if lower.contains("opus") {
+            return Color(red: 0.68, green: 0.42, blue: 0.98)
+        }
+
+        // Sonnet versions
+        if lower.contains("sonnet") && lower.contains("4.5") {
+            return Color(red: 0.98, green: 0.45, blue: 0.58)   // coral pink
+        }
+        if lower.contains("sonnet") {
+            return Color(red: 0.98, green: 0.45, blue: 0.58)
+        }
+
+        // Haiku
+        if lower.contains("haiku") {
+            return Color(red: 0.82, green: 0.56, blue: 0.95)   // lavender
+        }
+
+        // Codex
+        if lower.contains("codex") {
+            return Color(red: 0.25, green: 0.91, blue: 0.78)   // teal
+        }
+
+        // Fallback palette for unknown models
+        let fallback: [Color] = [
+            Color(red: 0.98, green: 0.74, blue: 0.26),  // amber
+            Color(red: 0.43, green: 0.77, blue: 0.50),  // green
+            Color(red: 0.53, green: 0.82, blue: 0.90),  // sky
+            Color(red: 0.95, green: 0.62, blue: 0.32),  // orange
+        ]
+        let hash = lower.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) }
+        return fallback[abs(hash) % fallback.count]
+    }
 }
 
 struct ContentView: View {
@@ -162,10 +206,8 @@ struct ContentView: View {
 
     private var usesPageScroll: Bool {
         switch selection ?? .dashboard {
-        case .dashboard, .pricing:
+        case .dashboard, .pricing, .threads:
             return true
-        case .threads:
-            return false
         }
     }
 
@@ -187,16 +229,6 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
 
-            if let snapshot = model.snapshot, let summary = model.costSummary {
-                ViewThatFits(in: .horizontal) {
-                    Text("\(number(snapshot.sessionUsages.count)) sessions • \(number(model.liveSessions.filter(\.isActiveNow).count)) live • \(summary.allTime.currency)")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(UITheme.textMuted)
-                        .lineLimit(1)
-                    EmptyView()
-                }
-            }
-
             Button {
                 model.refresh()
             } label: {
@@ -206,11 +238,11 @@ struct ContentView: View {
                             .controlSize(.small)
                     } else {
                         Image(systemName: "arrow.clockwise")
-                            .font(.title3.weight(.semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(UITheme.textMuted)
                     }
                 }
-                .frame(width: 22, height: 22)
+                .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
             .help("Refresh")

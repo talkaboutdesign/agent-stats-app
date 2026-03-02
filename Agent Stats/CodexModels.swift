@@ -9,6 +9,7 @@ struct CountStat: Identifiable, Hashable, Codable {
 
 struct ThreadSummary: Identifiable, Hashable, Codable {
     let id: String
+    let rolloutPath: String?
     let createdAt: Date?
     let updatedAt: Date?
     let source: String
@@ -356,9 +357,9 @@ extension String {
         }
 
         if let version, !version.isEmpty {
-            return "Claude \(family) \(version)"
+            return "\(family) \(version)"
         }
-        return "Claude \(family)"
+        return family
     }
 
     private func formattedCodexModelName(from lowered: String) -> String? {

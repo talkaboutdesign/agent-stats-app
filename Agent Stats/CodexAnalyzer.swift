@@ -186,6 +186,7 @@ actor CodexAnalyzer {
         let sql = """
         SELECT
             id,
+            COALESCE(rollout_path,''),
             created_at,
             updated_at,
             COALESCE(source,''),
@@ -211,17 +212,18 @@ actor CodexAnalyzer {
         while sqlite3_step(stmt) == SQLITE_ROW {
             let thread = ThreadSummary(
                 id: stringValue(stmt, 0),
-                createdAt: dateFromEpochSeconds(sqlite3_column_int64(stmt, 1)),
-                updatedAt: dateFromEpochSeconds(sqlite3_column_int64(stmt, 2)),
-                source: normalizedSource(stringValue(stmt, 3)),
-                modelProvider: stringValue(stmt, 4),
-                cwd: stringValue(stmt, 5),
-                title: stringValue(stmt, 6),
-                sandboxPolicy: stringValue(stmt, 7),
-                approvalMode: stringValue(stmt, 8),
-                tokensUsed: Int(sqlite3_column_int64(stmt, 9)),
-                archived: sqlite3_column_int64(stmt, 10) != 0,
-                gitBranch: stringValue(stmt, 11)
+                rolloutPath: stringValue(stmt, 1),
+                createdAt: dateFromEpochSeconds(sqlite3_column_int64(stmt, 2)),
+                updatedAt: dateFromEpochSeconds(sqlite3_column_int64(stmt, 3)),
+                source: normalizedSource(stringValue(stmt, 4)),
+                modelProvider: stringValue(stmt, 5),
+                cwd: stringValue(stmt, 6),
+                title: stringValue(stmt, 7),
+                sandboxPolicy: stringValue(stmt, 8),
+                approvalMode: stringValue(stmt, 9),
+                tokensUsed: Int(sqlite3_column_int64(stmt, 10)),
+                archived: sqlite3_column_int64(stmt, 11) != 0,
+                gitBranch: stringValue(stmt, 12)
             )
             analysis.threads.append(thread)
         }

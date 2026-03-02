@@ -12,119 +12,127 @@ private enum BentoCardHeight {
 
 extension ContentView {
     func dashboardView(_ snapshot: CodexSnapshot) -> some View {
-        let liveRows = model.liveSessions.filter(\.isActiveNow)
-        let codexActive = liveRows.filter { $0.provider == "Codex" }.count
-        let claudeActive = liveRows.filter { $0.provider == "Claude" }.count
-        let width = responsiveContentWidth
+        let recentSessions = Array(model.liveSessions.prefix(5))
+        let liveCount = model.liveSessions.filter(\.isActiveNow).count
+        let twoCol = responsiveContentWidth >= 740
         let workModels = topModelNames(from: snapshot.sessionUsages, limit: 5)
         let workColorScale = modelColorScale(for: workModels)
         let hourlyModelPoints = hourlyModelUsage(snapshot, models: workModels)
-        let activityHeatmap = activityByDay(snapshot.sessionUsages, days: 30)
+        let dailyModelPoints = dailyModelActivity(snapshot, models: workModels)
+        let activityHeatmap = activityByDay(snapshot.sessionUsages)
 
-        return VStack(spacing: 14) {
-            let pairedChartCardHeight = BentoCardHeight.chartPair
-            let columns = metricColumns(for: width)
-            LazyVGrid(columns: columns, spacing: 10) {
+        return VStack(spacing: 10) {
+            LazyVGrid(columns: flexibleColumns(twoCol ? 4 : 2), spacing: 10) {
                 MetricCard(title: "Threads", value: number(snapshot.totalThreads), icon: "bubble.left.and.bubble.right")
-                    .frame(minHeight: BentoCardHeight.small)
                 MetricCard(title: "Session Files", value: number(snapshot.sessionFileCount), icon: "doc.on.doc")
-                    .frame(minHeight: BentoCardHeight.small)
                 MetricCard(title: "Sessions", value: number(snapshot.sessionUsages.count), icon: "clock")
-                    .frame(minHeight: BentoCardHeight.small)
                 MetricCard(title: "Est. Cost", value: (model.costSummary?.allTime ?? 0).currency, icon: "dollarsign")
-                    .frame(minHeight: BentoCardHeight.small)
             }
 
-            let chartColumns = chartColumns(for: width)
-            LazyVGrid(columns: chartColumns, spacing: 10) {
-                VStack(alignment: .leading, spacing: 10) {
-                    CardHeader(title: "Activity", icon: "chart.bar.fill", subtitle: "30d")
-                    Chart(overviewDailyActivity()) { point in
-                        BarMark(
-                            x: .value("Day", point.date, unit: .day),
-                            y: .value("Count", point.cost)
+            if twoCol {
+                Grid(alignment: .topLeading, horizontalSpacing: 10, verticalSpacing: 10) {
+                    GridRow {
+                        dashboardDailyActivityCard(points: dailyModelPoints, colors: workColorScale)
+                        ModelHourlyStackedCard(
+                            title: "Peak Hours",
+                            subtitle: "By model",
+                            points: hourlyModelPoints,
+                            colors: workColorScale
                         )
-                        .foregroundStyle(UITheme.accentB.gradient)
-                        .cornerRadius(3)
                     }
-                    .chartXAxis(.hidden)
-                    .chartYAxis(.hidden)
-                    .frame(height: 170)
-                    Spacer(minLength: 0)
+                    GridRow {
+                        CostByModelCard(
+                            title: "Cost by Model",
+                            rows: model.costSummary?.modelRows ?? [],
+                            rowLimit: 5
+                        )
+                        CountListCard(
+                            title: "Top Models",
+                            rows: snapshot.modelCounts,
+                            rowLimit: 5,
+                            keyFormatter: { $0.modelDisplayName },
+                            icon: "cpu"
+                        )
+                    }
+                    GridRow {
+                        LiveSessionCardGrid(
+                            title: "Recent Sessions",
+                            subtitle: liveCount > 0 ? "\(liveCount) live" : "",
+                            rows: recentSessions,
+                            maxRows: 5
+                        )
+                        .gridCellColumns(2)
+                    }
                 }
-                .padding(12)
-                .panelCard(insetPadding: 0)
-                .frame(maxWidth: .infinity, minHeight: pairedChartCardHeight, maxHeight: pairedChartCardHeight)
-
-                ModelHourlyStackedCard(
-                    title: "When You Work",
-                    subtitle: "By model",
-                    points: hourlyModelPoints,
-                    colors: workColorScale,
-                    minHeight: pairedChartCardHeight
-                )
-                .frame(maxWidth: .infinity, minHeight: pairedChartCardHeight, maxHeight: pairedChartCardHeight)
+            } else {
+                VStack(spacing: 10) {
+                    dashboardDailyActivityCard(points: dailyModelPoints, colors: workColorScale)
+                    ModelHourlyStackedCard(
+                        title: "Peak Hours",
+                        subtitle: "By model",
+                        points: hourlyModelPoints,
+                        colors: workColorScale
+                    )
+                    CostByModelCard(
+                        title: "Cost by Model",
+                        rows: model.costSummary?.modelRows ?? [],
+                        rowLimit: 5
+                    )
+                    CountListCard(
+                        title: "Top Models",
+                        rows: snapshot.modelCounts,
+                        rowLimit: 5,
+                        keyFormatter: { $0.modelDisplayName },
+                        icon: "cpu"
+                    )
+                    LiveSessionCardGrid(
+                        title: "Recent Sessions",
+                        subtitle: liveCount > 0 ? "\(liveCount) live" : "",
+                        rows: recentSessions,
+                        maxRows: 5
+                    )
+                }
             }
 
             ActivityHeatmapCard(
                 title: "Activity Heatmap",
-                subtitle: "Last 30 days",
-                countsByDay: activityHeatmap,
-                days: 30,
-                minHeight: heatmapCardHeight(for: width)
+                countsByDay: activityHeatmap
             )
-
-            let listColumns = listColumns(for: width)
-            LazyVGrid(columns: listColumns, spacing: 10) {
-                CostByModelCard(
-                    title: "Cost by Model",
-                    rows: model.costSummary?.modelRows ?? [],
-                    rowLimit: 5,
-                    minHeight: BentoCardHeight.medium
-                )
-                CountListCard(
-                    title: "Top Models",
-                    rows: snapshot.modelCounts,
-                    rowLimit: 5,
-                    keyFormatter: { $0.modelDisplayName },
-                    icon: "cpu",
-                    minHeight: BentoCardHeight.medium
-                )
-                CountListCard(
-                    title: "Top Tools",
-                    rows: snapshot.toolCounts,
-                    rowLimit: 5,
-                    icon: "wrench.and.screwdriver",
-                    minHeight: BentoCardHeight.medium
-                )
-            }
-
-            if !liveRows.isEmpty {
-                let liveMetricColumns = liveMetricColumns(for: width)
-                LazyVGrid(columns: liveMetricColumns, spacing: 10) {
-                    MetricCard(title: "Live Now", value: number(liveRows.count), icon: "waveform.path.ecg")
-                        .frame(minHeight: BentoCardHeight.small)
-                    if codexActive > 0 {
-                        MetricCard(title: "Codex Active", value: number(codexActive), icon: "bolt.horizontal.circle")
-                            .frame(minHeight: BentoCardHeight.small)
-                    }
-                    if claudeActive > 0 {
-                        MetricCard(title: "Claude Active", value: number(claudeActive), icon: "sparkles")
-                            .frame(minHeight: BentoCardHeight.small)
-                    }
-                }
-
-                LiveSessionCardGrid(
-                    title: "Live Sessions",
-                    subtitle: "Recent activity",
-                    rows: liveRows,
-                    maxRows: max(1, liveRows.count),
-                    minHeight: BentoCardHeight.large
-                )
-            }
         }
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func dashboardDailyActivityCard(points: [ModelSeriesPoint], colors: [String: Color]) -> some View {
+        let seriesOrder = points.reduce(into: [String]()) { order, p in
+            if !order.contains(p.model) { order.append(p.model) }
+        }
+        VStack(alignment: .leading, spacing: 10) {
+            CardHeader(title: "Activity", icon: "chart.bar.fill", subtitle: "30d")
+            Chart {
+                ForEach(points) { point in
+                    BarMark(
+                        x: .value("Day", point.date, unit: .day),
+                        y: .value("Sessions", point.value),
+                        width: .fixed(6)
+                    )
+                    .foregroundStyle(by: .value("Model", point.model))
+                    .cornerRadius(2)
+                }
+            }
+            .chartForegroundStyleScale(
+                domain: seriesOrder,
+                range: seriesOrder.map { colors[$0] ?? .gray }
+            )
+            .chartLegend(.hidden)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .frame(height: 170)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .panelCard(insetPadding: 0)
     }
 
     func pricingView() -> some View {
@@ -203,10 +211,9 @@ extension ContentView {
 
                 SessionPricingList(
                     title: "Session History (\(sessionHistoryRange.title))",
-                    subtitle: "Codex + Claude sessions with per-session estimate",
+                    subtitle: "Codex + Claude daily rollup (sessions, tokens, and estimated cost)",
                     rows: recentRows,
-                    maxRows: recentRows.count,
-                    minHeight: BentoCardHeight.xLarge
+                    maxRows: recentRows.count
                 )
 
                 if !costSummary.unmatchedModels.isEmpty {
@@ -223,6 +230,8 @@ extension ContentView {
 
     func threadsView(_ snapshot: CodexSnapshot) -> some View {
         let normalizedTokensByThread = normalizedTokensByThreadID(snapshot.sessionUsages)
+        let modelByRolloutPath = modelByRolloutPath(snapshot.sessionUsages)
+        let displayedThreads = filteredThreads(snapshot.threads)
         let sessionTokenTotal = snapshot.sessionUsages.reduce(Int64(0)) { $0 + displayTokens(for: $1) }
         let width = responsiveContentWidth
 
@@ -243,49 +252,105 @@ extension ContentView {
                 Text("Recent Threads")
                     .font(.headline)
 
-                Table(snapshot.threads) {
-                    TableColumn("Updated") { thread in
-                        Text(thread.updatedAt?.friendly ?? "-")
-                    }
-                    .width(min: 150, max: 190)
+                Group {
+                    if displayedThreads.isEmpty {
+                        Text("No threads available.")
+                            .font(.callout)
+                            .foregroundStyle(UITheme.textMuted)
+                            .padding(.vertical, 10)
+                    } else {
+                        if width < 1020 {
+                            VStack(spacing: 0) {
+                                HStack(spacing: 8) {
+                                    threadHeaderCell("Updated")
+                                    threadHeaderCell("Model")
+                                    threadHeaderCell("Thread Tokens", alignment: .trailing)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
 
-                    TableColumn("Source") { thread in
-                        Text(thread.source)
-                            .lineLimit(1)
-                    }
-                    .width(min: 100, max: 230)
+                                Divider().overlay(UITheme.border)
 
-                    TableColumn("Model") { thread in
-                        Text(thread.modelProvider)
-                            .lineLimit(1)
-                    }
-                    .width(min: 120, max: 220)
+                                ForEach(Array(displayedThreads.enumerated()), id: \.element.id) { index, thread in
+                                    let resolvedModel = thread.rolloutPath.flatMap { modelByRolloutPath[$0] }
+                                        ?? thread.modelProvider.modelDisplayName
+                                    let threadTokens = normalizedTokensByThread[thread.id] ?? Int64(thread.tokensUsed)
+                                    let detail = [thread.source, thread.gitBranch]
+                                        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                                        .joined(separator: " • ")
 
-                    TableColumn("Thread Tokens") { thread in
-                        Text(number(normalizedTokensByThread[thread.id] ?? Int64(thread.tokensUsed)))
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .monospacedDigit()
-                    }
-                    .width(min: 90, max: 120)
+                                    HStack(alignment: .top, spacing: 8) {
+                                        threadTextCell(thread.updatedAt?.friendly ?? "-")
 
-                    TableColumn("Branch") { thread in
-                        Text(thread.gitBranch)
-                            .lineLimit(1)
-                    }
-                    .width(min: 90, max: 170)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(resolvedModel)
+                                                .font(.subheadline.weight(.semibold))
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+                                            if !detail.isEmpty {
+                                                Text(detail)
+                                                    .font(.caption)
+                                                    .foregroundStyle(UITheme.textMuted)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    TableColumn("CWD") { thread in
-                        Text(thread.cwd)
-                            .lineLimit(1)
-                            .textSelection(.enabled)
+                                        threadTextCell(number(threadTokens), alignment: .trailing)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 8)
+                                    .background(index.isMultiple(of: 2) ? Color.clear : UITheme.surfaceAlt.opacity(0.28))
+
+                                    if index < displayedThreads.count - 1 {
+                                        Divider().overlay(UITheme.border.opacity(0.65))
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(spacing: 0) {
+                                HStack(spacing: 8) {
+                                    threadHeaderCell("Updated")
+                                    threadHeaderCell("Source")
+                                    threadHeaderCell("Model")
+                                    threadHeaderCell("Thread Tokens", alignment: .trailing)
+                                    threadHeaderCell("Branch")
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
+
+                                Divider().overlay(UITheme.border)
+
+                                ForEach(Array(displayedThreads.enumerated()), id: \.element.id) { index, thread in
+                                    let resolvedModel = thread.rolloutPath.flatMap { modelByRolloutPath[$0] }
+                                        ?? thread.modelProvider.modelDisplayName
+                                    let threadTokens = normalizedTokensByThread[thread.id] ?? Int64(thread.tokensUsed)
+
+                                    HStack(spacing: 8) {
+                                        threadTextCell(thread.updatedAt?.friendly ?? "-")
+                                        threadTextCell(thread.source)
+                                        threadTextCell(resolvedModel)
+                                        threadTextCell(number(threadTokens), alignment: .trailing)
+                                        threadTextCell(thread.gitBranch)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 8)
+                                    .background(index.isMultiple(of: 2) ? Color.clear : UITheme.surfaceAlt.opacity(0.28))
+
+                                    if index < displayedThreads.count - 1 {
+                                        Divider().overlay(UITheme.border.opacity(0.65))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
             }
             .panelCard()
-            .frame(minHeight: BentoCardHeight.large)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     func number(_ value: Int) -> String {
@@ -317,6 +382,29 @@ extension ContentView {
             map[threadID] = max(map[threadID] ?? 0, displayTokens(for: usage))
         }
         return map
+    }
+
+    private func modelByRolloutPath(_ usages: [SessionUsage]) -> [String: String] {
+        var map: [String: (updatedAt: Date, model: String)] = [:]
+        for usage in usages where usage.provider == "Codex" {
+            guard usage.id.hasPrefix("codex:") else { continue }
+            let path = String(usage.id.dropFirst("codex:".count))
+            if let existing = map[path], existing.updatedAt >= usage.date {
+                continue
+            }
+            map[path] = (usage.date, usage.model.modelDisplayName)
+        }
+        return map.mapValues(\.model)
+    }
+
+    private func filteredThreads(_ threads: [ThreadSummary]) -> [ThreadSummary] {
+        threads.filter { thread in
+            thread.updatedAt != nil
+                || !thread.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !thread.modelProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || thread.tokensUsed > 0
+                || !thread.gitBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     private func codexThreadID(from usageID: String) -> String? {
@@ -373,24 +461,36 @@ extension ContentView {
     private func modelColorScale(for models: [String]) -> [String: Color] {
         var scale: [String: Color] = [:]
         for model in models {
-            scale[model] = colorForModel(model)
+            scale[model] = UITheme.modelColor(for: model)
         }
         return scale
     }
 
-    private func colorForModel(_ model: String) -> Color {
-        let palette: [Color] = [
-            UITheme.accentC,
-            UITheme.accentB,
-            UITheme.accentA,
-            Color(red: 0.43, green: 0.77, blue: 0.50),
-            Color(red: 0.95, green: 0.62, blue: 0.32),
-            Color(red: 0.82, green: 0.56, blue: 0.95),
-            Color(red: 0.95, green: 0.45, blue: 0.58),
-            Color(red: 0.53, green: 0.82, blue: 0.90),
-        ]
-        let seed = model.unicodeScalars.reduce(0) { (($0 * 33) + Int($1.value)) % 10_007 }
-        return palette[seed % palette.count]
+    private func dailyModelActivity(_ snapshot: CodexSnapshot, models: [String]) -> [ModelSeriesPoint] {
+        guard !models.isEmpty else { return [] }
+        let calendar = Calendar.current
+        let modelSet = Set(models)
+        let end = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: -29, to: end) ?? end
+        var buckets: [String: [Date: Double]] = [:]
+
+        for usage in snapshot.sessionUsages {
+            let modelName = usage.model.modelDisplayName
+            guard modelSet.contains(modelName) else { continue }
+            let day = calendar.startOfDay(for: usage.date)
+            guard day >= start, day <= end else { continue }
+            buckets[modelName, default: [:]][day, default: 0] += 1
+        }
+
+        var points: [ModelSeriesPoint] = []
+        var cursor = start
+        while cursor <= end {
+            for model in models {
+                points.append(ModelSeriesPoint(date: cursor, model: model, value: buckets[model]?[cursor] ?? 0))
+            }
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end.addingTimeInterval(1)
+        }
+        return points
     }
 
     private func hourlyModelUsage(_ snapshot: CodexSnapshot, models: [String]) -> [ModelHourlyUsagePoint] {
@@ -415,18 +515,13 @@ extension ContentView {
         return points
     }
 
-    private func activityByDay(_ usages: [SessionUsage], days: Int) -> [Date: Int] {
+    private func activityByDay(_ usages: [SessionUsage]) -> [Date: Int] {
         let calendar = Calendar.current
-        let end = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: end) ?? end
         var counts: [Date: Int] = [:]
-
         for usage in usages {
             let day = calendar.startOfDay(for: usage.date)
-            guard day >= start, day <= end else { continue }
             counts[day, default: 0] += 1
         }
-
         return counts
     }
 
@@ -512,11 +607,9 @@ extension ContentView {
     private func metricColumns(for width: CGFloat) -> [GridItem] {
         let count: Int
         switch width {
-        case ..<760:
-            count = 1
-        case ..<1100:
+        case ..<520:
             count = 2
-        case ..<1420:
+        case ..<900:
             count = 3
         default:
             count = 4
@@ -525,41 +618,30 @@ extension ContentView {
     }
 
     private func chartColumns(for width: CGFloat) -> [GridItem] {
-        flexibleColumns(width < 1020 ? 1 : 2)
-    }
-
-    private func listColumns(for width: CGFloat) -> [GridItem] {
-        let count: Int
-        switch width {
-        case ..<860:
-            count = 1
-        case ..<1340:
-            count = 2
-        default:
-            count = 3
-        }
-        return flexibleColumns(count)
-    }
-
-    private func liveMetricColumns(for width: CGFloat) -> [GridItem] {
-        let count: Int
-        switch width {
-        case ..<860:
-            count = 1
-        case ..<1220:
-            count = 2
-        default:
-            count = 3
-        }
-        return flexibleColumns(count)
+        // Stack only on narrower widths; keep side-by-side in normal desktop layouts.
+        flexibleColumns(width < 820 ? 1 : 2)
     }
 
     private func flexibleColumns(_ count: Int, spacing: CGFloat = 10) -> [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: spacing), count: max(1, count))
     }
 
-    private func heatmapCardHeight(for width: CGFloat) -> CGFloat {
-        BentoCardHeight.heatmap
+    private func threadHeaderCell(_ text: String, alignment: Alignment = .leading) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(UITheme.textMuted)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: alignment)
+    }
+
+    private func threadTextCell(_ text: String, alignment: Alignment = .leading) -> some View {
+        Text(text)
+            .font(.subheadline.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .minimumScaleFactor(0.85)
+            .frame(maxWidth: .infinity, alignment: alignment)
     }
 
 }

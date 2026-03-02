@@ -78,17 +78,22 @@ struct MetricCard: View {
     let icon: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(UITheme.textMuted)
+        VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .font(.system(size: 26, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                Text(title)
+                    .font(.caption.weight(.medium))
+            }
+            .foregroundStyle(UITheme.textMuted)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
         .panelCard(insetPadding: 0)
     }
 }
@@ -152,6 +157,7 @@ struct CountListCard: View {
                     }
                 }
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(minHeight: minHeight, alignment: .topLeading)
@@ -165,14 +171,6 @@ struct CostByModelCard: View {
     let rows: [ModelCostRow]
     var rowLimit: Int = 5
     var minHeight: CGFloat? = nil
-
-    private let barPalette: [Color] = [
-        UITheme.accentC,
-        UITheme.accentB,
-        Color(red: 0.43, green: 0.77, blue: 0.50),
-        Color.white.opacity(0.25),
-        UITheme.accentA,
-    ]
 
     var body: some View {
         let displayedRows = Array(rows.prefix(rowLimit))
@@ -204,7 +202,7 @@ struct CostByModelCard: View {
                                     Capsule(style: .continuous)
                                         .fill(UITheme.surfaceAlt.opacity(0.9))
                                     Capsule(style: .continuous)
-                                        .fill(colorForBar(index))
+                                        .fill(UITheme.modelColor(for: row.model))
                                         .frame(width: width)
                                 }
                             }
@@ -227,6 +225,7 @@ struct CostByModelCard: View {
                 }
                 .padding(.top, 8)
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(minHeight: minHeight, alignment: .topLeading)
@@ -234,9 +233,6 @@ struct CostByModelCard: View {
         .panelCard(insetPadding: 0)
     }
 
-    private func colorForBar(_ index: Int) -> Color {
-        barPalette[index % barPalette.count]
-    }
 }
 
 struct ModelSeriesPoint: Identifiable, Hashable {
@@ -300,9 +296,7 @@ private struct ModelLegend: View {
 
 struct ActivityHeatmapCard: View {
     let title: String
-    let subtitle: String
     let countsByDay: [Date: Int]
-    let days: Int
     var minHeight: CGFloat? = nil
 
     private let cellSize: CGFloat = 13
@@ -310,10 +304,22 @@ struct ActivityHeatmapCard: View {
 
     @State private var hoveredDate: Date?
 
+    private var daySpan: Int {
+        guard let earliest = countsByDay.keys.min() else { return 30 }
+        let span = Calendar.current.dateComponents([.day], from: earliest, to: Date()).day ?? 30
+        return max(span + 1, 7)
+    }
+
+    private var subtitle: String {
+        let weeks = daySpan / 7
+        if weeks <= 4 { return "Last \(daySpan) days" }
+        return "Last \(weeks) weeks"
+    }
+
     var body: some View {
         let calendar = isoCalendar
         let endDay = calendar.startOfDay(for: Date())
-        let startDay = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: endDay) ?? endDay
+        let startDay = calendar.date(byAdding: .day, value: -(daySpan - 1), to: endDay) ?? endDay
         let dates = dayRange(from: startDay, to: endDay, calendar: calendar)
         let startPadding = weekdayOffset(startDay, calendar: calendar)
 
@@ -327,13 +333,7 @@ struct ActivityHeatmapCard: View {
             Array(cells[startIndex ..< min(startIndex + 7, cells.count)])
         }
         let maxCount = max(countsByDay.values.max() ?? 0, 1)
-        let totalSessions = countsByDay.values.reduce(0, +)
-        let activeDays = countsByDay.values.filter { $0 > 0 }.count
-        let averagePerDay = days > 0 ? Double(totalSessions) / Double(days) : 0
-        let peakDay = peakDay(calendar: calendar)
-        let topWeekdays = weekdayTotals(calendar: calendar).prefix(3)
-
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 10) {
             CardHeader(
                 title: title,
                 icon: "calendar",
@@ -342,18 +342,17 @@ struct ActivityHeatmapCard: View {
                 trailingText: hoveredHeatmapText(calendar: calendar)
             )
 
-            HStack(alignment: .top, spacing: 14) {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .trailing, spacing: cellGap) {
-                        ForEach(0..<7, id: \.self) { row in
-                            Text(dayRowLabel(row))
-                                .font(.caption2)
-                                .foregroundStyle(UITheme.textMuted)
-                                .frame(width: 26, height: cellSize, alignment: .trailing)
-                        }
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .trailing, spacing: cellGap) {
+                    ForEach(0..<7, id: \.self) { row in
+                        Text(dayRowLabel(row))
+                            .font(.caption2)
+                            .foregroundStyle(UITheme.textMuted)
+                            .frame(width: 26, height: cellSize, alignment: .trailing)
                     }
-                    .padding(.top, 0)
+                }
 
+                ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: cellGap) {
                         ForEach(Array(weekColumns.enumerated()), id: \.offset) { _, week in
                             VStack(spacing: cellGap) {
@@ -364,47 +363,7 @@ struct ActivityHeatmapCard: View {
                         }
                     }
                 }
-                .frame(maxWidth: 320, alignment: .leading)
-
-                Divider()
-                    .background(UITheme.border)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    statRow("Total sessions", value: "\(totalSessions)")
-                    statRow("Active days", value: "\(activeDays) / \(days)")
-                    statRow("Avg / day", value: String(format: "%.1f", averagePerDay))
-                    statRow(
-                        "Peak day",
-                        value: peakDay.map { "\($0.date.formatted(.dateTime.month(.abbreviated).day())) • \($0.count)" } ?? "No activity"
-                    )
-
-                    Divider()
-                        .background(UITheme.border)
-                        .padding(.vertical, 2)
-
-                    ForEach(Array(topWeekdays.enumerated()), id: \.offset) { _, weekday in
-                        HStack(spacing: 8) {
-                            Text(weekday.label)
-                                .font(.caption)
-                                .foregroundStyle(UITheme.textMuted)
-                                .frame(width: 44, alignment: .leading)
-                            GeometryReader { proxy in
-                                let maxWeekday = max(topWeekdays.map(\.count).max() ?? 1, 1)
-                                let width = proxy.size.width * (Double(weekday.count) / Double(maxWeekday))
-                                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                    .fill(UITheme.accentA.opacity(0.8))
-                                    .frame(width: max(width, weekday.count > 0 ? 6 : 0))
-                            }
-                            .frame(height: 6)
-                            Text("\(weekday.count)")
-                                .font(.caption)
-                                .foregroundStyle(UITheme.textMuted)
-                                .monospacedDigit()
-                        }
-                        .frame(height: 14)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .defaultScrollAnchor(.trailing)
             }
 
             HStack(spacing: 6) {
@@ -428,19 +387,6 @@ struct ActivityHeatmapCard: View {
         .panelCard(insetPadding: 0)
     }
 
-    private func statRow(_ label: String, value: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(UITheme.textMuted)
-            Spacer()
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.92))
-                .monospacedDigit()
-        }
-    }
-
     private var isoCalendar: Calendar {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
@@ -462,37 +408,6 @@ struct ActivityHeatmapCard: View {
     private func weekdayOffset(_ date: Date, calendar: Calendar) -> Int {
         let weekday = calendar.component(.weekday, from: date)
         return (weekday + 5) % 7 // monday = 0
-    }
-
-    private func weekdayTotals(calendar: Calendar) -> [(label: String, count: Int)] {
-        var totals: [Int: Int] = [:]
-        for (day, count) in countsByDay {
-            let weekday = calendar.component(.weekday, from: day)
-            totals[weekday, default: 0] += count
-        }
-
-        return totals
-            .map { (weekday, count) in
-                let label = calendar.veryShortWeekdaySymbols[(weekday - 1 + 7) % 7]
-                return (label, count)
-            }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count {
-                    return lhs.label < rhs.label
-                }
-                return lhs.count > rhs.count
-            }
-    }
-
-    private func peakDay(calendar: Calendar) -> (date: Date, count: Int)? {
-        countsByDay
-            .map { (date: calendar.startOfDay(for: $0.key), count: $0.value) }
-            .max { lhs, rhs in
-                if lhs.count == rhs.count {
-                    return lhs.date < rhs.date
-                }
-                return lhs.count < rhs.count
-            }
     }
 
     @ViewBuilder
@@ -569,7 +484,7 @@ struct ModelMultiLineChartCard: View {
                             x: .value("Day", point.date, unit: .day),
                             y: .value("Value", point.value)
                         )
-                        .interpolationMethod(.catmullRom)
+                        .interpolationMethod(.linear)
                         .lineStyle(.init(lineWidth: 2))
                         .foregroundStyle(by: .value("Model", point.model))
 
@@ -681,7 +596,8 @@ struct ModelHourlyStackedCard: View {
                     ForEach(points) { point in
                         BarMark(
                             x: .value("Hour", point.hour),
-                            y: .value("Sessions", point.count)
+                            y: .value("Sessions", point.count),
+                            width: .fixed(8)
                         )
                         .foregroundStyle(by: .value("Model", point.model))
                         .cornerRadius(2)
@@ -739,6 +655,7 @@ struct ModelHourlyStackedCard: View {
 
                 ModelLegend(models: seriesOrder, colors: colors, wraps: false)
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(minHeight: minHeight, alignment: .topLeading)
@@ -815,31 +732,28 @@ struct LiveSessionCardGrid: View {
     let maxRows: Int
     var minHeight: CGFloat? = nil
 
-    private static let tokenFormatter: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter
-    }()
-
     var body: some View {
         let displayedRows = Array(rows.prefix(maxRows))
-        let columns = [GridItem(.adaptive(minimum: 250, maximum: 460), spacing: 10)]
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 10) {
             CardHeader(title: title, icon: "clock.arrow.circlepath", subtitle: subtitle)
 
             if displayedRows.isEmpty {
-                Text("No live sessions.")
+                Text("No recent sessions.")
                     .font(.callout)
                     .foregroundStyle(UITheme.textMuted)
                     .padding(.vertical, 6)
             } else {
-                LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(displayedRows) { row in
-                        liveSessionCard(row)
+                VStack(spacing: 0) {
+                    ForEach(Array(displayedRows.enumerated()), id: \.element.id) { index, row in
+                        sessionRow(row)
+                        if index < displayedRows.count - 1 {
+                            Divider().overlay(UITheme.border.opacity(0.5))
+                        }
                     }
                 }
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(minHeight: minHeight, alignment: .topLeading)
@@ -847,75 +761,45 @@ struct LiveSessionCardGrid: View {
         .panelCard(insetPadding: 0)
     }
 
-    private func liveSessionCard(_ row: LiveSessionRow) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(row.isActiveNow ? "Live" : "Idle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(row.isActiveNow ? UITheme.accentA : UITheme.textMuted)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(UITheme.surfaceAlt, in: Capsule())
-                Text(row.provider)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(UITheme.textMuted)
-                Spacer()
-                Text(updatedLabel(for: row))
+    private func sessionRow(_ row: LiveSessionRow) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(row.isActiveNow ? UITheme.accentA : UITheme.textMuted.opacity(0.4))
+                .frame(width: 7, height: 7)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.model.modelDisplayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(row.source) • \(updatedLabel(for: row))")
                     .font(.caption)
                     .foregroundStyle(UITheme.textMuted)
+                    .lineLimit(1)
             }
 
-            Text(row.model.modelDisplayName)
-                .font(.headline)
-                .lineLimit(1)
+            Spacer(minLength: 0)
 
-            Text(row.source)
-                .font(.caption)
-                .foregroundStyle(UITheme.textMuted)
-                .lineLimit(1)
-
-            HStack(spacing: 12) {
-                metric("Tokens", number(row.totalTokens))
-                metric("Est. Cost", row.estimatedCost.currency)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(10)
-        .background(UITheme.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(UITheme.border, lineWidth: 1)
-        )
-    }
-
-    private func metric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(UITheme.textMuted)
-            Text(value)
+            Text(row.estimatedCost.currency)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
     }
 
     private func updatedLabel(for row: LiveSessionRow) -> String {
         let delta = max(Int(Date().timeIntervalSince(row.lastUpdated)), 0)
-        let minutes = delta / 60
-        let seconds = delta % 60
-
-        if minutes == 0 {
-            return "\(seconds)s ago"
+        if delta < 60 {
+            return "\(delta)s ago"
         }
+        let minutes = delta / 60
         if minutes < 60 {
-            return "\(minutes)m \(seconds)s"
+            return "\(minutes)m ago"
+        }
+        let hours = minutes / 60
+        if hours < 24 {
+            return "\(hours)h ago"
         }
         return row.lastUpdated.friendly
-    }
-
-    private func number(_ value: Int64) -> String {
-        LiveSessionCardGrid.tokenFormatter.string(from: NSNumber(value: value)) ?? "0"
     }
 }
 
@@ -926,6 +810,16 @@ struct SessionPricingList: View {
     let maxRows: Int
     var minHeight: CGFloat? = nil
 
+    private struct DailySessionSummary: Identifiable, Hashable {
+        let date: Date
+        let sessionCount: Int
+        let liveCount: Int
+        let totalTokens: Int64
+        let totalCost: Double
+
+        var id: Date { date }
+    }
+
     private static let tokenFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -933,7 +827,7 @@ struct SessionPricingList: View {
     }()
 
     var body: some View {
-        let displayedRows = Array(rows.prefix(maxRows))
+        let displayedRows = Array(dailyRows().prefix(maxRows))
 
         return VStack(alignment: .leading, spacing: 12) {
             CardHeader(title: title, icon: "clock.arrow.circlepath", subtitle: subtitle)
@@ -944,11 +838,43 @@ struct SessionPricingList: View {
                     .foregroundStyle(UITheme.textMuted)
                     .padding(.vertical, 10)
             } else {
-                ViewThatFits(in: .horizontal) {
-                    tableContent(displayedRows, isCompact: false)
-                    tableContent(displayedRows, isCompact: true)
+                Table(displayedRows) {
+                    TableColumn("Date") { row in
+                        Text(dateLabel(for: row.date))
+                    }
+                    .width(min: 180, max: 240)
+
+                    TableColumn("Sessions") { row in
+                        Text(number(row.sessionCount))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                    .width(min: 90, max: 110)
+
+                    TableColumn("Live") { row in
+                        Text(number(row.liveCount))
+                            .foregroundStyle(row.liveCount > 0 ? UITheme.accentA : UITheme.textMuted)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                    .width(min: 70, max: 90)
+
+                    TableColumn("Tokens") { row in
+                        Text(number(row.totalTokens))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                    .width(min: 120, max: 170)
+
+                    TableColumn("Est. Cost") { row in
+                        Text(row.totalCost.currency)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                    .width(min: 90, max: 120)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: dailyTableHeight(for: displayedRows.count))
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -957,130 +883,49 @@ struct SessionPricingList: View {
         .panelCard(insetPadding: 0)
     }
 
-    @ViewBuilder
-    private func tableContent(_ displayedRows: [LiveSessionRow], isCompact: Bool) -> some View {
-        VStack(spacing: 0) {
-            if isCompact {
-                compactHeader
-            } else {
-                rowHeader
+    private func dailyRows() -> [DailySessionSummary] {
+        let calendar = Calendar.current
+        var grouped: [Date: (sessions: Int, live: Int, tokens: Int64, cost: Double)] = [:]
+
+        for row in rows {
+            let day = calendar.startOfDay(for: row.lastUpdated)
+            var aggregate = grouped[day] ?? (sessions: 0, live: 0, tokens: 0, cost: 0)
+            aggregate.sessions += 1
+            aggregate.live += row.isActiveNow ? 1 : 0
+            aggregate.tokens += row.totalTokens
+            aggregate.cost += row.estimatedCost
+            grouped[day] = aggregate
+        }
+
+        return grouped
+            .map { day, aggregate in
+                DailySessionSummary(
+                    date: day,
+                    sessionCount: aggregate.sessions,
+                    liveCount: aggregate.live,
+                    totalTokens: aggregate.tokens,
+                    totalCost: aggregate.cost
+                )
             }
-            Divider().overlay(UITheme.border)
-
-            LazyVStack(spacing: 0) {
-                ForEach(displayedRows) { row in
-                    if isCompact {
-                        compactRowView(row)
-                    } else {
-                        rowView(row)
-                    }
-                    Divider().overlay(UITheme.border.opacity(0.65))
-                }
-            }
-        }
+            .sorted { $0.date > $1.date }
     }
 
-    private var compactHeader: some View {
-        HStack(spacing: 8) {
-            headerCell("Session", width: 220, alignment: .leading)
-            Spacer(minLength: 0)
-            headerCell("Tokens", width: 100, alignment: .trailing)
-            headerCell("Est. Cost", width: 78, alignment: .trailing)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    private func dateLabel(for date: Date) -> String {
+        date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
     }
 
-    private var rowHeader: some View {
-        HStack(spacing: 8) {
-            headerCell("State", width: 64, alignment: .leading)
-            headerCell("Provider", width: 74, alignment: .leading)
-            headerCell("Source", width: 120, alignment: .leading)
-            headerCell("Model", width: 150, alignment: .leading)
-            headerCell("Updated", width: 115, alignment: .leading)
-            headerCell("Tokens", width: 104, alignment: .trailing)
-            headerCell("Est. Cost", width: 78, alignment: .trailing)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    private func compactDateLabel(for date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).day())
     }
 
-    private func rowView(_ row: LiveSessionRow) -> some View {
-        HStack(spacing: 8) {
-            textCell(row.isActiveNow ? "Live" : "Idle", width: 64, color: row.isActiveNow ? UITheme.accentA : UITheme.textMuted)
-            textCell(row.provider, width: 74)
-            textCell(row.source, width: 120)
-            textCell(row.model.modelDisplayName, width: 150)
-            textCell(updatedLabel(for: row), width: 115)
-            textCell(number(row.totalTokens), width: 104, alignment: .trailing)
-            textCell(row.estimatedCost.currency, width: 78, alignment: .trailing)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(row.isActiveNow ? UITheme.accentB.opacity(0.07) : Color.clear)
+    private func dailyTableHeight(for count: Int) -> CGFloat {
+        let headerHeight: CGFloat = 34
+        let rowHeight: CGFloat = 34
+        return headerHeight + (CGFloat(max(count, 1)) * rowHeight)
     }
 
-    private func compactRowView(_ row: LiveSessionRow) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(row.isActiveNow ? "Live" : "Idle")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(row.isActiveNow ? UITheme.accentA : UITheme.textMuted)
-                    Text(row.provider)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(UITheme.textMuted)
-                }
-                Text(row.model.modelDisplayName)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text("\(row.source) • \(updatedLabel(for: row))")
-                    .font(.caption)
-                    .foregroundStyle(UITheme.textMuted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            textCell(number(row.totalTokens), width: 100, alignment: .trailing)
-            textCell(row.estimatedCost.currency, width: 78, alignment: .trailing)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(row.isActiveNow ? UITheme.accentB.opacity(0.07) : Color.clear)
-    }
-
-    private func headerCell(_ text: String, width: CGFloat, alignment: Alignment) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(UITheme.textMuted)
-            .frame(width: width, alignment: alignment)
-    }
-
-    private func textCell(
-        _ text: String,
-        width: CGFloat,
-        alignment: Alignment = .leading,
-        color: Color = .white
-    ) -> some View {
-        Text(text)
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .minimumScaleFactor(0.85)
-            .frame(width: width, alignment: alignment)
-    }
-
-    private func updatedLabel(for row: LiveSessionRow) -> String {
-        let delta = max(Int(Date().timeIntervalSince(row.lastUpdated)), 0)
-        let minutes = delta / 60
-        let seconds = delta % 60
-
-        if minutes == 0 {
-            return "\(seconds) sec"
-        }
-        if minutes < 60 {
-            return "\(minutes) min, \(seconds) sec"
-        }
-        return row.lastUpdated.friendly
+    private func number(_ value: Int) -> String {
+        SessionPricingList.tokenFormatter.string(from: NSNumber(value: value)) ?? "0"
     }
 
     private func number(_ value: Int64) -> String {
